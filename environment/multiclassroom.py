@@ -1,139 +1,153 @@
 import numpy as np
 from pettingzoo.utils import ParallelEnv
 from gym.spaces import Discrete, Box
-from environment.simulation import simulate_infections_n_classrooms  # Your simulation function
+from environment.simulation import simulate_infections_n_classrooms
 import itertools
 import random
 import os
 
 
 class MultiClassroomEnv(ParallelEnv):
-    def __init__(self, num_classrooms=1, total_students=100, max_weeks=2, action_levels_per_class=None,
-                 alpha=0.008, beta=0.01, phi=0.3, gamma=0.3, seed=None,
-                 community_risk_data_file=None):
+    def __init__(self, num_classrooms=1, total_students=100, max_weeks=15,
+                 action_levels_per_class=None, continuous_action=False,
+                 alpha=0.008, beta=0.01, phi=0.2, gamma=0.5, seed=None,
+                 community_risk_data_file=None, eval_mode=False,
+                 cooperative_reward=True):
         """
         Parameters:
-          community_risk_data_file (str): Path to the CSV file containing community risk data.
-                                          If provided, CSV data is used when the environment is in evaluation mode.
-          seed (int): Random seed to ensure reproducibility.
+          num_classrooms (int): Number of classrooms/agents
+          total_students (int): Total students per classroom
+          max_weeks (int): Episode length
+          action_levels_per_class (list): Number of discrete action levels per classroom
+          continuous_action (bool): If True, actions are continuous [0, total_students]
+          alpha (float): Infection rate parameter
+          beta (float): Recovery rate parameter
+          phi (float): Cross-classroom transmission rate
+          gamma (float): Balance weight between allowed students and infections (omega)
+          seed (int): Random seed
+          community_risk_data_file (str): Path to risk data CSV (optional)
+          eval_mode (bool): If True, use deterministic risk pattern
+          cooperative_reward (bool): If True, all agents receive the average reward
         """
         self.num_classrooms = num_classrooms
         self.total_students = total_students
         self.max_weeks = max_weeks
-        self.phi = phi  # Cross-classroom transmission rate
-        self.gamma = gamma  # Balance weight between allowed students and infections
+        self.phi = phi
+        self.gamma = gamma
         self.current_week = 0
+        self.continuous_action = continuous_action
+        self.eval_mode = eval_mode
+        self.cooperative_reward = cooperative_reward
 
-        # Store the seed value for reuse
-        self.seed_value = seed
-        self.seed(seed)  # Set both np and random seeds
-        self.rng = np.random.default_rng(seed)
+        # Parameter setup (alpha, beta, etc.)
+        self.alpha_m = [alpha] * num_classrooms
+        self.beta = [beta] * num_classrooms
 
-        self.episode_seed = 0
-        self.metadata = {'render.modes': ['human']}
-
-        # Infection and community transmission rates.
-        self.alpha_m = np.full(self.num_classrooms, alpha)
-        self.beta = np.full(self.num_classrooms, beta)
-
-        self.action_levels_per_class = action_levels_per_class
-        self.action_levels = {
-            i: np.linspace(0, self.total_students, levels).astype(int).tolist()
-            for i, levels in enumerate(action_levels_per_class)
-        }
-
-        # Define agents and gym spaces.
-        self.agents = [f'classroom_{i}' for i in range(num_classrooms)]
+        self.agents = [f"classroom_{i}" for i in range(self.num_classrooms)]
         self.possible_agents = self.agents[:]
-        self.action_spaces = {agent: Discrete(len(self.action_levels[i]))
-                              for i, agent in enumerate(self.agents)}
+
+        # Spaces
+        if self.continuous_action:
+            self.action_spaces = {
+                agent: Box(low=0.0, high=float(self.total_students), shape=(1,), dtype=np.float32)
+                for agent in self.agents
+            }
+        else:
+            # Discrete actions
+            if action_levels_per_class is None:
+                action_levels_per_class = [11] * num_classrooms
+            self.action_levels = action_levels_per_class
+            self.action_spaces = {
+                agent: Discrete(self.action_levels[i])
+                for i, agent in enumerate(self.agents)
+            }
+            # Precompute discrete action values for each agent
+            # Maps action index to actual allowed students value
+            self.discrete_action_values = {
+                agent: np.linspace(0, self.total_students, self.action_levels[i])
+                for i, agent in enumerate(self.agents)
+            }
+
+        # Observation Space: [Current Infected, Community Risk]
         self.observation_spaces = {
-            agent: Box(low=np.array([0, 0]), high=np.array([self.total_students, 1]), dtype=np.float32)
+            agent: Box(low=0.0, high=float(self.total_students), shape=(2,), dtype=np.float32)
             for agent in self.agents
         }
 
-        self.student_status = [0] * num_classrooms  # Current infected counts per classroom.
-        self.allowed_students = [0] * num_classrooms
+        # State initialization
+        self.student_status = [0] * self.num_classrooms
+        self.allowed_students = [0] * self.num_classrooms
 
-        # Load CSV data if provided.
-        self.csv_risk_data = None
-        if community_risk_data_file is not None:
-            if not os.path.exists(community_risk_data_file):
-                raise ValueError(f"Community risk data file not found: {community_risk_data_file}")
-            # Load only the "Risk-Level" column (the second column) as floats.
-            self.csv_risk_data = np.genfromtxt(
-                community_risk_data_file, delimiter=',', skip_header=1, usecols=1, dtype=float
-            )
-            if len(self.csv_risk_data) < self.max_weeks:
-                raise ValueError("Not enough community risk data for the evaluation period.")
+        # Risk Data Loading
+        self.community_risk_data = []
+        if community_risk_data_file and os.path.exists(community_risk_data_file):
+            # Load CSV logic here if needed, for now we simulate risk
+            pass
 
-        # Generate shared risk data for training.
-        self.shared_community_risk = self._generate_shared_episode_risk()
-
-        # Default mode: training (use generated risk).
-        self.eval_mode = False
-
-        # Define a discretized state space.
-        infected_values = range(0, self.total_students + 1, 10)
-        community_risk_values = [i / 10 for i in range(11)]
-        self.state_space = list(itertools.product(infected_values, community_risk_values))
+        if seed is not None:
+            self.seed(seed)
 
     def seed(self, seed=None):
-        """Set the seed for both numpy and random."""
-        if seed is not None:
-            self.seed_value = seed
-            np.random.seed(seed)
-            random.seed(seed)
-
-    def set_mode(self, eval_mode: bool):
-        """
-        Switch the environment mode.
-          - eval_mode=False: training mode (use generated risk).
-          - eval_mode=True: evaluation mode (use CSV risk data).
-        """
-        self.eval_mode = eval_mode
+        np.random.seed(seed)
+        random.seed(seed)
 
     def _generate_shared_episode_risk(self):
-        """Generate a risk pattern for the episode (used during training)."""
-        self.episode_seed += 1
-        # Use the dedicated generator with a fixed offset.
-        local_rng = np.random.default_rng(self.seed_value + self.episode_seed)
-        t = np.linspace(0, 2 * np.pi, self.max_weeks)
-        risk_pattern = np.zeros(self.max_weeks)
-        num_components = local_rng.integers(1, 4)  # Random integer in [1, 3]
-        for _ in range(num_components):
-            amplitude = local_rng.uniform(0.2, 0.4)
-            frequency = local_rng.uniform(0.5, 2.0)
-            phase = local_rng.uniform(0, 2 * np.pi)
-            risk_pattern += amplitude * np.sin(frequency * t + phase)
-        # Normalize and clip to [0.1, 1.0].
-        risk_pattern = (risk_pattern - risk_pattern.min()) / (risk_pattern.max() - risk_pattern.min())
-        risk_pattern = 0.9 * risk_pattern + 0.1  # Scale to range [0.1, 1.0]
-        # Add some noise.
-        risk_pattern = [max(0.1, min(1.0, risk + local_rng.uniform(-0.1, 0.1))) for risk in risk_pattern]
-        return risk_pattern
+        # Generate a random risk curve for the episode
+        length = self.max_weeks + 5
+        base_risk = np.random.uniform(0.1, 0.5)
+        trend = np.linspace(0, np.random.uniform(-0.2, 0.4), length)
+        noise = np.random.normal(0, 0.05, length)
+        risk = np.clip(base_risk + trend + noise, 0.0, 1.0)
+        return risk
 
-    def _get_risk(self):
-        """Return the current community risk based on the mode."""
-        current_week_index = min(self.current_week, self.max_weeks - 1)
-        if self.eval_mode and self.csv_risk_data is not None:
-            return float(self.csv_risk_data[current_week_index])
-        else:
-            return float(self.shared_community_risk[current_week_index])
+    def set_mode(self, eval_mode):
+        self.eval_mode = eval_mode
 
     def _get_observations(self):
-        risk = self._get_risk()
-        return {
-            agent: np.array([self.student_status[i], risk])
-            for i, agent in enumerate(self.agents)
-        }
+        obs = {}
+        curr_risk = 0.0
+        if self.eval_mode:
+            # Fixed pattern for evaluation
+            curr_risk = min(1.0, self.current_week / 20.0)
+        else:
+            if hasattr(self, 'shared_community_risk'):
+                curr_risk = self.shared_community_risk[min(self.current_week, len(self.shared_community_risk) - 1)]
+            else:
+                curr_risk = np.random.random()
+
+        for i, agent in enumerate(self.agents):
+            obs[agent] = np.array([float(self.student_status[i]), float(curr_risk)], dtype=np.float32)
+        return obs
 
     def step(self, actions):
-        self.allowed_students = [
-            self._map_action_to_allowed_students(actions[agent], i)
-            for i, agent in enumerate(self.agents)
-        ]
-        risk = self._get_risk()
+        # Parse actions
+        if self.continuous_action:
+            for i, agent in enumerate(self.agents):
+                act = actions[agent]
+                # If array, extract val
+                if isinstance(act, (np.ndarray, list)):
+                    act = act[0]
+                self.allowed_students[i] = float(act)
+        else:
+            # Discrete action mapping: action index -> allowed students value
+            for i, agent in enumerate(self.agents):
+                action_idx = actions[agent]
+                # Handle if action is array
+                if isinstance(action_idx, (np.ndarray, list)):
+                    action_idx = int(action_idx[0])
+                else:
+                    action_idx = int(action_idx)
+                # Map to actual value
+                self.allowed_students[i] = self.discrete_action_values[agent][action_idx]
+
+        # Get current risk
+        risk = 0.0
+        if self.eval_mode:
+            risk = min(1.0, self.current_week / 20.0)
+        else:
+            risk = self.shared_community_risk[min(self.current_week, len(self.shared_community_risk) - 1)]
+
+        # Simulate Dynamics
         self.student_status = simulate_infections_n_classrooms(
             self.num_classrooms,
             self.alpha_m,
@@ -143,32 +157,45 @@ class MultiClassroomEnv(ParallelEnv):
             self.allowed_students,
             [risk] * self.num_classrooms
         )
-        rewards = {}
+
+        # --- REWARD CALCULATION ---
+        individual_rewards = []
         for i, agent in enumerate(self.agents):
             allowed = self.allowed_students[i]
             infected = self.student_status[i]
-            rewards[agent] = self.gamma * allowed - (1 - self.gamma) * infected
+
+            # Base individual reward
+            r_i = self.gamma * allowed - (1 - self.gamma) * infected
+            individual_rewards.append(r_i)
+
+        rewards = {}
+        if self.cooperative_reward:
+            # Cooperative: Everyone gets the Mean Reward
+            avg_reward = np.mean(individual_rewards)
+            for agent in self.agents:
+                rewards[agent] = avg_reward
+        else:
+            # Competitive/Individual
+            for i, agent in enumerate(self.agents):
+                rewards[agent] = individual_rewards[i]
+
         self.current_week += 1
         dones = {agent: self.current_week >= self.max_weeks for agent in self.agents}
-        return self._get_observations(), rewards, dones, {}
 
-    def _map_action_to_allowed_students(self, action, class_index):
-        action_levels = self.action_levels_per_class[class_index]
-        return action * (self.total_students // (action_levels - 1))
+        return self._get_observations(), rewards, dones, {}
 
     def reset(self, seed=None, options=None):
         if seed is not None:
             self.seed(seed)
-        # Reinitialize student status and allowed students.
-        self.student_status = [np.random.randint(1, 99) for _ in range(self.num_classrooms)]
+
+        self.student_status = [np.random.randint(0, 5) for _ in range(self.num_classrooms)]
         self.allowed_students = [0] * self.num_classrooms
         self.current_week = 0
-        # In training mode, regenerate the shared risk pattern.
+
         if not self.eval_mode:
             self.shared_community_risk = self._generate_shared_episode_risk()
+
         return self._get_observations()
 
     def render(self):
-        risk = self._get_risk()
-        for i, agent in enumerate(self.agents):
-            print(f"{agent} - Infected: {self.student_status[i]}, Community Risk: {risk}")
+        pass

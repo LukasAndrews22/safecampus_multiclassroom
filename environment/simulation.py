@@ -19,7 +19,6 @@ def simulate_infections_n_classrooms(n_classes, alpha_m, beta, delta, current_in
       - p_i is the average infection proportion in the other classrooms.
     """
     shared_student_fraction = 0.3
-    total_students = 100
     new_infected = []
     for i in range(n_classes):
         current_inf = current_infected[i]

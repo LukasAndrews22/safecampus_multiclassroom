@@ -1,20 +1,34 @@
-myopic_results
-results
-Exp1
-Exp2
-Exp 3
-Exp4
-Exp5
-exp6
-Exp3
-analysis
-hyperparameter_analysis
-model_behavior
-# ignore all Python byte-cache folders
+.claude/
+.idea/
 __pycache__/
-*.py[cod]
 
-# ignore your experiment results
-agents/mytopic_exp_results/
+# Training results directories
+centralized_ppo_results/
+mappo_results/
+analysis_results/
+analysis_results_*/
+
+# Python virtual environment
+venv/
+env/
+*.pyc
+*.pyo
+
+# Model checkpoints
+*.pt
+*.pth
+
+# Data files
+*.csv
+*.json
+
+# Plots and visualizations
+*.png
+*.jpg
+*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
 
 
