@@ -1,6 +1,6 @@
 import numpy as np
 from pettingzoo.utils import ParallelEnv
-from gym.spaces import Discrete, Box
+from gymnasium.spaces import Discrete, Box
 from environment.simulation import simulate_infections_n_classrooms
 import itertools
 import random

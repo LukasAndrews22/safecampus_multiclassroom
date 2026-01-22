@@ -764,7 +764,7 @@ def generate_summary_table(results: Dict):
         cent_str = f"{row['centralized_mean']:.1f}" if not np.isnan(row['centralized_mean']) else "N/A"
         ctde_str = f"{row['ctde_mean']:.1f}" if not np.isnan(row['ctde_mean']) else "N/A"
         
-        print(f"ω={omega}: "
+        print(f"omega={omega}: "
               f"Myopic={row['myopic_mean']:.1f}±{row['myopic_std']:.1f}, "
               f"Cent={cent_str}, CTDE={ctde_str}, "
               f"Random={row['random_mean']:.1f}")
@@ -803,7 +803,7 @@ def generate_comparison_plot(results: Dict):
         offset = (i - len(methods) / 2 + 0.5) * width
         ax.bar(x + offset, means, width, yerr=stds, label=label, color=color, capsize=2)
     
-    ax.set_xlabel('Omega (ω)', fontweight='bold')
+    ax.set_xlabel('Omega', fontweight='bold')
     ax.set_ylabel('Reward', fontweight='bold')
     ax.set_title('Performance Comparison: Multi-Classroom Epidemic Control', fontweight='bold')
     ax.set_xticks(x)
