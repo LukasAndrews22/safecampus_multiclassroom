@@ -528,7 +528,7 @@ def evaluate_ctde_model(
                 print("    Could not import CTDE module")
                 return None, None, None
         
-        model_path = f"mappo_results_3_classrooms/models/mappo_omega_{omega}_run_0"
+        model_path = f"mappo_results/models/mappo_omega_{omega}_run_0"
         if not os.path.exists(model_path + '.pt'):
             print(f"    CTDE model not found: {model_path}.pt")
             return None, None, None
