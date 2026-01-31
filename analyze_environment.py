@@ -314,7 +314,7 @@ class DPUpperBound:
             print("=" * 70)
             print("DP UPPER BOUND SOLVER (Backward Induction)")
             print("=" * 70)
-            print(f"Classrooms: {N}, Horizon: {T}, ω: {self.omega}")
+            print(f"Classrooms: {N}, Horizon: {T}, omega: {self.omega}")
             print(f"State grid: {n_inf}^{N} = {n_inf**N} states per time")
             print(f"Action grid: {self.n_action_bins}^{N} = {self.n_action_bins**N} joint actions")
             print()
@@ -680,20 +680,20 @@ def run_full_analysis():
         
         results[omega] = {}
         
-        # # 1. DP Upper Bound
-        # print("\n[1] Computing DP Upper Bound...")
-        # dp_solver = DPUpperBound(
-        #     omega=omega,
-        #     num_classrooms=NUM_CLASSROOMS,
-        #     n_infected_bins=N_INFECTED_BINS,
-        #     n_action_bins=N_ACTION_BINS
-        # )
-        # dp_solver.solve(verbose=True)
+        # 1. DP Upper Bound
+        print("\n[1] Computing DP Upper Bound...")
+        dp_solver = DPUpperBound(
+            omega=omega,
+            num_classrooms=NUM_CLASSROOMS,
+            n_infected_bins=N_INFECTED_BINS,
+            n_action_bins=N_ACTION_BINS
+        )
+        dp_solver.solve(verbose=True)
         
-        # print("  Evaluating DP policy...")
-        # dp_mean, dp_std, _ = dp_solver.evaluate()
-        # results[omega]['dp'] = {'mean': dp_mean, 'std': dp_std}
-        # print(f"  DP Reward: {dp_mean:.2f} ± {dp_std:.2f}")
+        print("  Evaluating DP policy...")
+        dp_mean, dp_std, _ = dp_solver.evaluate()
+        results[omega]['dp'] = {'mean': dp_mean, 'std': dp_std}
+        print(f"  DP Reward: {dp_mean:.2f} ± {dp_std:.2f}")
         
         # 2. Myopic Optimal
         print("\n[2] Evaluating Myopic Optimal...")
@@ -748,8 +748,8 @@ def generate_summary_table(results: Dict):
         r = results[omega]
         row = {
             'omega': omega,
-            # 'dp_mean': r['dp']['mean'],
-            # 'dp_std': r['dp']['std'],
+            'dp_mean': r['dp']['mean'],
+            'dp_std': r['dp']['std'],
             'myopic_mean': r['myopic']['mean'],
             'myopic_std': r['myopic']['std'],
             'centralized_mean': r['centralized']['mean'] if r.get('centralized') else np.nan,
@@ -765,6 +765,7 @@ def generate_summary_table(results: Dict):
         ctde_str = f"{row['ctde_mean']:.1f}" if not np.isnan(row['ctde_mean']) else "N/A"
         
         print(f"omega={omega}: "
+              f"DP={row['dp_mean']:.1f}±{row['dp_std']:.1f}, "
               f"Myopic={row['myopic_mean']:.1f}±{row['myopic_std']:.1f}, "
               f"Cent={cent_str}, CTDE={ctde_str}, "
               f"Random={row['random_mean']:.1f}")
@@ -785,9 +786,9 @@ def generate_comparison_plot(results: Dict):
     x = np.arange(len(OMEGA_VALUES))
     width = 0.15
     
-    methods = ['myopic', 'centralized', 'ctde', 'random']
-    colors = ['forestgreen', 'steelblue', 'coral', 'gray']
-    labels = ['Myopic', 'Centralized', 'CTDE', 'Random']
+    methods = ['dp', 'myopic', 'centralized', 'ctde', 'random']
+    colors = ['black', 'forestgreen', 'steelblue', 'coral', 'gray']
+    labels = ['DP Upper Bound', 'Myopic', 'Centralized', 'CTDE', 'Random']
     
     for i, (method, color, label) in enumerate(zip(methods, colors, labels)):
         means = []
@@ -823,7 +824,7 @@ def save_results(results: Dict):
     serializable = {}
     for omega in OMEGA_VALUES:
         serializable[str(omega)] = {}
-        for method in [ 'myopic', 'centralized', 'ctde', 'random']:
+        for method in ['dp', 'myopic', 'centralized', 'ctde', 'random']:
             if results[omega].get(method) and results[omega][method] is not None:
                 serializable[str(omega)][method] = {
                     'mean': float(results[omega][method]['mean']),
