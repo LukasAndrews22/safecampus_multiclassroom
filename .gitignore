@@ -7,6 +7,7 @@ centralized_ppo_results/
 mappo_results/
 analysis_results/
 analysis_results_*/
+scalability_results/
 
 # Python virtual environment
 venv/
