@@ -64,7 +64,17 @@ NUM_LAYERS = 2
 POLICY_GRID_POINTS = 20
 NUM_RUNS = 1
 
-device = torch.device("cpu")
+# device = torch.device("cpu")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("Using GPU: CUDA")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("Using GPU: MPS (Apple Metal)")
+else:
+    device = torch.device("cpu")
+    print("Using CPU")
+
 
 plt.rcParams.update({
     'font.size': 12,
