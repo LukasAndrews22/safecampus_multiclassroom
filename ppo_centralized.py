@@ -50,9 +50,6 @@ LR_CANDIDATES = [0.0001, 0.0003, 0.001, 0.003, 0.005, 0.01]
 # Omega (Preference weight)
 OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
-# Environment Settings
-TOTAL_STUDENTS = 100
-NUM_CLASSROOMS = 2
 COOPERATIVE_REWARD = True
 TUNE_SEED = 123
 
@@ -446,13 +443,13 @@ class CentralizedPPO:
 # 4. TRAINING FUNCTIONS
 # ============================================================
 
-def run_centralized_training(omega, seed, lr, episodes, num_classrooms=NUM_CLASSROOMS):
+def run_centralized_training(omega, seed, lr, episodes, num_classrooms, total_students):
     """Run centralized PPO training."""
     set_seed(seed)
 
     env = MultiClassroomEnv(
         num_classrooms=num_classrooms,
-        total_students=TOTAL_STUDENTS,
+        total_students=total_students,
         max_weeks=MAX_WEEKS,
         gamma=omega,
         continuous_action=True,
@@ -477,7 +474,7 @@ def run_centralized_training(omega, seed, lr, episodes, num_classrooms=NUM_CLASS
 
     for ep in range(episodes):
         obs = env.reset()
-        global_state = normalize_global_state(obs, agent_ids, TOTAL_STUDENTS)
+        global_state = normalize_global_state(obs, agent_ids, total_students)
         ep_reward = 0
         done = False
 
@@ -487,7 +484,7 @@ def run_centralized_training(omega, seed, lr, episodes, num_classrooms=NUM_CLASS
             actions_normalized, log_prob, value = ppo.select_actions(global_state, add_noise=True)
 
             actions_env = {
-                aid: np.array([actions_normalized[i] * TOTAL_STUDENTS])
+                aid: np.array([actions_normalized[i] * total_students])
                 for i, aid in enumerate(agent_ids)
             }
 
@@ -503,7 +500,7 @@ def run_centralized_training(omega, seed, lr, episodes, num_classrooms=NUM_CLASS
             buffer.rewards.append(joint_reward)
             buffer.is_terminals.append(any(dones.values()))
 
-            global_state = normalize_global_state(next_obs, agent_ids, TOTAL_STUDENTS)
+            global_state = normalize_global_state(next_obs, agent_ids, total_students)
             ep_reward += joint_reward
 
             if time_step % UPDATE_TIMESTEP == 0:
@@ -520,7 +517,7 @@ def run_centralized_training(omega, seed, lr, episodes, num_classrooms=NUM_CLASS
 # 5. POLICY EXTRACTION AND MONOTONICITY EVALUATION
 # ============================================================
 
-def extract_centralized_policy_grid(ppo, agent_idx=0, total_students=TOTAL_STUDENTS,
+def extract_centralized_policy_grid(ppo, agent_idx=0, total_students=100,
                                     grid_points=POLICY_GRID_POINTS, other_infected_frac=0.1):
     """Extract policy grid for a specific agent from centralized controller."""
     num_classrooms = ppo.num_actions
@@ -551,7 +548,7 @@ def extract_centralized_policy_grid(ppo, agent_idx=0, total_students=TOTAL_STUDE
     return policy_grid
 
 
-def extract_joint_policy_grid(ppo, total_students=TOTAL_STUDENTS, grid_points=POLICY_GRID_POINTS):
+def extract_joint_policy_grid(ppo, total_students=100, grid_points=POLICY_GRID_POINTS):
     """Extract policy grids for all agents assuming symmetric states."""
     num_classrooms = ppo.num_actions
     infected_vals = np.linspace(0, total_students, grid_points)
@@ -666,13 +663,14 @@ def select_best_lr(omega_results):
     return best['lr'], best, {'min_violations': best['dominance_violations']}
 
 
-def grid_search_tuning(num_classrooms=NUM_CLASSROOMS):
+def grid_search_tuning(num_classrooms, total_students):
     """Grid search for best learning rate per omega."""
     optimized_lrs = {}
 
     print(f"\n--- Starting Grid Search Tuning (Tanh Policy) ---")
     print(f"LR Candidates: {LR_CANDIDATES}")
     print(f"Number of Classrooms: {num_classrooms}")
+    print(f"Total Students: {total_students}")
 
     for omega in OMEGA_VALUES:
         print(f"\n{'=' * 60}")
@@ -684,12 +682,12 @@ def grid_search_tuning(num_classrooms=NUM_CLASSROOMS):
         for lr in LR_CANDIDATES:
             print(f"\n  Testing LR={lr}...")
 
-            ppo, history = run_centralized_training(omega, TUNE_SEED, lr, TUNE_EPISODES, num_classrooms)
+            ppo, history = run_centralized_training(omega, TUNE_SEED, lr, TUNE_EPISODES, num_classrooms, total_students)
 
             # Evaluation
             env = MultiClassroomEnv(
                 num_classrooms=num_classrooms,
-                total_students=TOTAL_STUDENTS,
+                total_students=total_students,
                 max_weeks=MAX_WEEKS,
                 gamma=omega,
                 continuous_action=True,
@@ -699,7 +697,7 @@ def grid_search_tuning(num_classrooms=NUM_CLASSROOMS):
             )
             agent_ids = sorted(env.agents)
             obs = env.reset()
-            global_state = normalize_global_state(obs, agent_ids, TOTAL_STUDENTS)
+            global_state = normalize_global_state(obs, agent_ids, total_students)
             done = False
             avg_eval_reward = 0
             
@@ -707,14 +705,14 @@ def grid_search_tuning(num_classrooms=NUM_CLASSROOMS):
                 state_tensor = torch.FloatTensor(global_state).unsqueeze(0).to(device)
                 with torch.no_grad():
                     actions_normalized = ppo.actor.get_deterministic_action(state_tensor).cpu().numpy().flatten()
-                actions_env = {aid: np.array([actions_normalized[i] * TOTAL_STUDENTS]) for i, aid in enumerate(agent_ids)}
+                actions_env = {aid: np.array([actions_normalized[i] * total_students]) for i, aid in enumerate(agent_ids)}
                 next_obs, rewards, dones, _ = env.step(actions_env)
                 avg_eval_reward += sum(rewards.values()) / len(rewards)
-                global_state = normalize_global_state(next_obs, agent_ids, TOTAL_STUDENTS)
+                global_state = normalize_global_state(next_obs, agent_ids, total_students)
                 done = any(dones.values())
 
             # Extract and evaluate policy
-            policy_grids = extract_joint_policy_grid(ppo)
+            policy_grids = extract_joint_policy_grid(ppo, total_students)
 
             total_violations = 0
             mono_scores = []
@@ -767,10 +765,11 @@ def load_lrs():
 # 7. FULL TRAINING AND EVALUATION
 # ============================================================
 
-def train_and_evaluate_optimal(optimized_lrs, num_classrooms=NUM_CLASSROOMS):
+def train_and_evaluate_optimal(optimized_lrs, num_classrooms, total_students):
     """Run full training with optimized LRs and save models."""
     print(f"\n--- Starting Full Training (Tanh Policy) ---")
     print(f"Number of Classrooms: {num_classrooms}")
+    print(f"Total Students: {total_students}")
 
     all_rewards = {}
     trained_agents = {}
@@ -786,7 +785,7 @@ def train_and_evaluate_optimal(optimized_lrs, num_classrooms=NUM_CLASSROOMS):
             seed = TUNE_SEED
             print(f"\n  Run {run + 1}/{NUM_RUNS} (seed={seed})")
 
-            ppo, history = run_centralized_training(omega, seed, lr, FULL_EPISODES, num_classrooms)
+            ppo, history = run_centralized_training(omega, seed, lr, FULL_EPISODES, num_classrooms, total_students)
 
             # Save model
             model_path = os.path.join(MODEL_DIR, f"centralized_omega_{omega}_run_{run}")
@@ -797,7 +796,7 @@ def train_and_evaluate_optimal(optimized_lrs, num_classrooms=NUM_CLASSROOMS):
                 trained_agents[omega] = ppo
 
         # Evaluate monotonicity
-        policy_grids = extract_joint_policy_grid(trained_agents[omega])
+        policy_grids = extract_joint_policy_grid(trained_agents[omega], total_students)
 
         dom_scores = []
         dom_violations = 0
@@ -826,7 +825,7 @@ def train_and_evaluate_optimal(optimized_lrs, num_classrooms=NUM_CLASSROOMS):
 
     # Plot results
     plot_combined_rewards(all_rewards)
-    plot_policy_grids(trained_agents, num_classrooms)
+    plot_policy_grids(trained_agents, num_classrooms, total_students)
     plot_monotonicity_summary(monotonicity_scores, num_classrooms)
 
     # Save results
@@ -875,7 +874,7 @@ def plot_combined_rewards(all_rewards):
     plt.close()
 
 
-def plot_policy_grids(trained_agents, num_classrooms=NUM_CLASSROOMS):
+def plot_policy_grids(trained_agents, num_classrooms, total_students):
     """Plot policy grids for all agents across omega values."""
     print("\n--- Plotting Policy Grids ---")
 
@@ -893,7 +892,7 @@ def plot_policy_grids(trained_agents, num_classrooms=NUM_CLASSROOMS):
 
     for idx, omega in enumerate(OMEGA_VALUES):
         ppo = trained_agents[omega]
-        policy_grids = extract_joint_policy_grid(ppo)
+        policy_grids = extract_joint_policy_grid(ppo, total_students)
 
         for agent_idx in range(max_agents_to_plot):
             policy_grid = policy_grids[agent_idx]
@@ -901,7 +900,7 @@ def plot_policy_grids(trained_agents, num_classrooms=NUM_CLASSROOMS):
 
             im = ax.imshow(
                 policy_grid,
-                extent=[0, 1, 0, TOTAL_STUDENTS],
+                extent=[0, 1, 0, total_students],
                 origin='lower',
                 aspect='auto',
                 cmap=cmap,
@@ -919,7 +918,7 @@ def plot_policy_grids(trained_agents, num_classrooms=NUM_CLASSROOMS):
     cbar_ax = fig.add_axes([0.92, 0.15, 0.01, 0.7])
     fig.colorbar(im, cax=cbar_ax, label='Action (Capacity Fraction)')
 
-    title = f'Centralized PPO Policies ({num_classrooms} Classrooms)'
+    title = f'Centralized PPO Policies ({num_classrooms} Classrooms, {total_students} Students)'
     if num_classrooms > max_agents_to_plot:
         title += f' (showing first {max_agents_to_plot})'
     plt.suptitle(title, fontsize=14, fontweight='bold')
@@ -928,7 +927,7 @@ def plot_policy_grids(trained_agents, num_classrooms=NUM_CLASSROOMS):
     plt.close()
 
 
-def plot_monotonicity_summary(monotonicity_scores, num_classrooms=NUM_CLASSROOMS):
+def plot_monotonicity_summary(monotonicity_scores, num_classrooms=2):
     """Plot monotonicity scores."""
     print("\n--- Plotting Monotonicity Summary ---")
 
@@ -972,7 +971,7 @@ def plot_monotonicity_summary(monotonicity_scores, num_classrooms=NUM_CLASSROOMS
 # 9. MAIN
 # ============================================================
 
-def main(mode='tune_and_train', num_classrooms=NUM_CLASSROOMS):
+def main(mode='tune_and_train', num_classrooms=2, total_students=100):
     """
     Main function.
     
@@ -984,18 +983,33 @@ def main(mode='tune_and_train', num_classrooms=NUM_CLASSROOMS):
     print(f"\n{'='*60}")
     print(f"Centralized PPO Training (Tanh Policy)")
     print(f"Number of Classrooms: {num_classrooms}")
+    print(f"Total Students: {total_students}")
     print(f"{'='*60}")
 
     if mode in ['tune', 'tune_and_train']:
-        optimized_lrs = grid_search_tuning(num_classrooms)
+        optimized_lrs = grid_search_tuning(num_classrooms, total_students)
     else:
         optimized_lrs = load_lrs()
 
     if mode in ['train', 'tune_and_train']:
-        train_and_evaluate_optimal(optimized_lrs, num_classrooms)
+        train_and_evaluate_optimal(optimized_lrs, num_classrooms, total_students)
 
     print(f"\nResults saved to {OUTPUT_DIR}")
 
 
 if __name__ == '__main__':
-    main(mode='tune_and_train', num_classrooms=NUM_CLASSROOMS)
+    
+    # Define the combinations of classrooms and students to run
+    run_configurations = [
+        {'num_classrooms': 2, 'total_students': 100},
+        {'num_classrooms': 2, 'total_students': 200},
+        {'num_classrooms': 4, 'total_students': 100},
+        {'num_classrooms': 4, 'total_students': 200},
+    ]
+
+    for config in run_configurations:
+        main(
+            mode='tune_and_train', 
+            num_classrooms=config['num_classrooms'], 
+            total_students=config['total_students']
+        )

@@ -30,9 +30,6 @@ from environment.multiclassroom import MultiClassroomEnv
 OUTPUT_DIR = "analysis_results_0.8_gamma"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Environment parameters
-TOTAL_STUDENTS = 100
-NUM_CLASSROOMS = 2
 MAX_WEEKS = 15
 COMMUNITY_RISK_FILE = "weekly_risk_sample_b.csv"
 
@@ -512,7 +509,9 @@ class RandomPolicy:
 def evaluate_ctde_model(
     omega: float, 
     num_episodes: int = NUM_EVAL_EPISODES, 
-    seed: int = EVAL_SEED
+    seed: int = EVAL_SEED,
+    num_classrooms: int = 2,
+    total_students: int = 100
 ) -> Tuple[Optional[float], Optional[float], Optional[List[float]]]:
     """Load and evaluate trained CTDE model."""
     try:
@@ -541,8 +540,8 @@ def evaluate_ctde_model(
         
         for ep in range(num_episodes):
             env = MultiClassroomEnv(
-                num_classrooms=NUM_CLASSROOMS,
-                total_students=TOTAL_STUDENTS,
+                num_classrooms=num_classrooms,
+                total_students=total_students,
                 max_weeks=MAX_WEEKS,
                 gamma=omega,
                 continuous_action=True,
@@ -560,11 +559,11 @@ def evaluate_ctde_model(
             while not done:
                 actions_for_env = {}
                 for i, aid in enumerate(agent_ids):
-                    state = normalize_state(obs[aid], TOTAL_STUDENTS)
+                    state = normalize_state(obs[aid], total_students)
                     state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
                     with torch.no_grad():
                         action = model.actors[i].get_deterministic_action(state_tensor)
-                    actions_for_env[aid] = action.cpu().numpy().flatten() * TOTAL_STUDENTS
+                    actions_for_env[aid] = action.cpu().numpy().flatten() * total_students
                 
                 obs, rewards, dones, _ = env.step(actions_for_env)
                 ep_reward += sum(rewards.values()) / len(agent_ids)
@@ -582,7 +581,9 @@ def evaluate_ctde_model(
 def evaluate_centralized_model(
     omega: float, 
     num_episodes: int = NUM_EVAL_EPISODES, 
-    seed: int = EVAL_SEED
+    seed: int = EVAL_SEED,
+    num_classrooms: int = 2,
+    total_students: int = 100
 ) -> Tuple[Optional[float], Optional[float], Optional[List[float]]]:
     """Load and evaluate trained Centralized model."""
     try:
@@ -602,8 +603,8 @@ def evaluate_centralized_model(
         
         for ep in range(num_episodes):
             env = MultiClassroomEnv(
-                num_classrooms=NUM_CLASSROOMS,
-                total_students=TOTAL_STUDENTS,
+                num_classrooms=num_classrooms,
+                total_students=total_students,
                 max_weeks=MAX_WEEKS,
                 gamma=omega,
                 continuous_action=True,
@@ -618,7 +619,7 @@ def evaluate_centralized_model(
             # Build global state
             global_state = []
             for aid in agent_ids:
-                global_state.append(obs[aid][0] / TOTAL_STUDENTS)
+                global_state.append(obs[aid][0] / total_students)
                 global_state.append(obs[aid][1])
             global_state = np.array(global_state, dtype=np.float32)
             
@@ -632,7 +633,7 @@ def evaluate_centralized_model(
                 joint_action = joint_action.cpu().numpy().flatten()
                 
                 actions_for_env = {
-                    aid: np.array([joint_action[i] * TOTAL_STUDENTS])
+                    aid: np.array([joint_action[i] * total_students])
                     for i, aid in enumerate(agent_ids)
                 }
                 
@@ -642,7 +643,7 @@ def evaluate_centralized_model(
                 # Update global state
                 global_state = []
                 for aid in agent_ids:
-                    global_state.append(obs[aid][0] / TOTAL_STUDENTS)
+                    global_state.append(obs[aid][0] / total_students)
                     global_state.append(obs[aid][1])
                 global_state = np.array(global_state, dtype=np.float32)
                 
@@ -661,13 +662,13 @@ def evaluate_centralized_model(
 # MAIN ANALYSIS
 # ============================================================
 
-def run_full_analysis():
+def run_full_analysis(num_classrooms, total_students):
     """Run comprehensive analysis for all omega values."""
     print("=" * 80)
     print("COMPREHENSIVE ENVIRONMENT ANALYSIS")
     print("Multi-Classroom Epidemic Control")
     print("=" * 80)
-    print(f"Classrooms: {NUM_CLASSROOMS}, Students: {TOTAL_STUDENTS}, Horizon: {MAX_WEEKS}")
+    print(f"Classrooms: {num_classrooms}, Students: {total_students}, Horizon: {MAX_WEEKS}")
     print(f"Omega values: {OMEGA_VALUES}")
     print()
     
@@ -684,7 +685,8 @@ def run_full_analysis():
         print("\n[1] Computing DP Upper Bound...")
         dp_solver = DPUpperBound(
             omega=omega,
-            num_classrooms=NUM_CLASSROOMS,
+            num_classrooms=num_classrooms,
+            total_students=total_students,
             n_infected_bins=N_INFECTED_BINS,
             n_action_bins=N_ACTION_BINS
         )
@@ -697,14 +699,14 @@ def run_full_analysis():
         
         # 2. Myopic Optimal
         print("\n[2] Evaluating Myopic Optimal...")
-        myopic = MyopicAgent(omega=omega, num_classrooms=NUM_CLASSROOMS)
+        myopic = MyopicAgent(omega=omega, num_classrooms=num_classrooms, total_students=total_students)
         myopic_mean, myopic_std, _ = myopic.evaluate()
         results[omega]['myopic'] = {'mean': myopic_mean, 'std': myopic_std}
         print(f"  Myopic Reward: {myopic_mean:.2f} ± {myopic_std:.2f}")
         
         # 3. CTDE
         print("\n[3] Evaluating CTDE (MAPPO)...")
-        ctde_mean, ctde_std, _ = evaluate_ctde_model(omega)
+        ctde_mean, ctde_std, _ = evaluate_ctde_model(omega, num_classrooms=num_classrooms, total_students=total_students)
         if ctde_mean is not None:
             results[omega]['ctde'] = {'mean': ctde_mean, 'std': ctde_std}
             print(f"  CTDE Reward: {ctde_mean:.2f} ± {ctde_std:.2f}")
@@ -714,7 +716,7 @@ def run_full_analysis():
         
         # 4. Centralized
         print("\n[4] Evaluating Centralized PPO...")
-        cent_mean, cent_std, _ = evaluate_centralized_model(omega)
+        cent_mean, cent_std, _ = evaluate_centralized_model(omega, num_classrooms=num_classrooms, total_students=total_students)
         if cent_mean is not None:
             results[omega]['centralized'] = {'mean': cent_mean, 'std': cent_std}
             print(f"  Centralized Reward: {cent_mean:.2f} ± {cent_std:.2f}")
@@ -724,7 +726,7 @@ def run_full_analysis():
         
         # 5. Random
         print("\n[5] Evaluating Random...")
-        random_policy = RandomPolicy(omega=omega)
+        random_policy = RandomPolicy(omega=omega, num_classrooms=num_classrooms, total_students=total_students)
         random_mean, random_std, _ = random_policy.evaluate()
         results[omega]['random'] = {'mean': random_mean, 'std': random_std}
         print(f"  Random Reward: {random_mean:.2f} ± {random_std:.2f}")
@@ -842,7 +844,20 @@ def save_results(results: Dict):
 # ============================================================
 
 if __name__ == "__main__":
-    results = run_full_analysis()
+    
+    # Define the combinations of classrooms and students to run
+    run_configurations = [
+        {'num_classrooms': 2, 'total_students': 100},
+        {'num_classrooms': 2, 'total_students': 200},
+        {'num_classrooms': 4, 'total_students': 100},
+        {'num_classrooms': 4, 'total_students': 200},
+    ]
+
+    for config in run_configurations:
+        run_full_analysis(
+            num_classrooms=config['num_classrooms'], 
+            total_students=config['total_students']
+        )
     
     print("\n" + "=" * 80)
     print("ANALYSIS COMPLETE")

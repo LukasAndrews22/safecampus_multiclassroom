@@ -50,9 +50,6 @@ LR_CANDIDATES = [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.1]
 # Omega (Preference) - The weight 'gamma' in the environment
 OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
-# Environment Settings
-TOTAL_STUDENTS = 100
-NUM_CLASSROOMS = 2
 COOPERATIVE_REWARD = True
 TUNE_SEED = 123
 
@@ -630,14 +627,13 @@ class MAPPO_CTDE:
 # 3. TRAINING LOGIC
 # ============================================================
 
-def run_marl_session(omega, seed, lr, episodes, num_classrooms=NUM_CLASSROOMS, 
-                     policy_type='beta'):
+def run_marl_session(omega, seed, lr, episodes, policy_type='beta', num_classrooms=2, total_students=100):
     """Runs a single MAPPO CTDE training session."""
     set_seed(seed)
     
     env = MultiClassroomEnv(
         num_classrooms=num_classrooms,
-        total_students=TOTAL_STUDENTS,
+        total_students=total_students,
         max_weeks=MAX_WEEKS,
         gamma=omega,
         continuous_action=True,
@@ -671,7 +667,7 @@ def run_marl_session(omega, seed, lr, episodes, num_classrooms=NUM_CLASSROOMS,
 
     for ep in range(episodes):
         obs = env.reset()
-        n_obs = {aid: normalize_state(obs[aid], TOTAL_STUDENTS) for aid in env.agents}
+        n_obs = {aid: normalize_state(obs[aid], total_students) for aid in env.agents}
         ep_reward = 0
         done = False
 
@@ -698,7 +694,7 @@ def run_marl_session(omega, seed, lr, episodes, num_classrooms=NUM_CLASSROOMS,
                 a_normalized_tensor = torch.FloatTensor(a_normalized).to(device)
 
                 # Scale to environment action space
-                a_env = a_normalized * TOTAL_STUDENTS
+                a_env = a_normalized * total_students
                 actions_for_env[aid] = a_env
 
                 # Store in buffer
@@ -715,7 +711,7 @@ def run_marl_session(omega, seed, lr, episodes, num_classrooms=NUM_CLASSROOMS,
             for aid in agent_ids:
                 buffers[aid].rewards.append(rewards[aid])
                 buffers[aid].is_terminals.append(dones[aid])
-                n_obs[aid] = normalize_state(next_obs[aid], TOTAL_STUDENTS)
+                n_obs[aid] = normalize_state(next_obs[aid], total_students)
 
             ep_reward += sum(rewards.values()) / num_agents
 
@@ -734,7 +730,7 @@ def run_marl_session(omega, seed, lr, episodes, num_classrooms=NUM_CLASSROOMS,
 # 4. MONOTONICITY EVALUATION FUNCTIONS
 # ============================================================
 
-def extract_policy_grid(mappo_agent, agent_idx=0, total_students=TOTAL_STUDENTS, 
+def extract_policy_grid(mappo_agent, agent_idx=0, total_students=100, 
                         grid_points=POLICY_GRID_POINTS):
     """Extracts a policy grid from a specific agent's actor."""
     infected_vals = np.linspace(0, total_students, grid_points)
@@ -857,15 +853,15 @@ def compute_action_diversity(policy_grid, num_bins=10):
 TUNE_EVAL_SEEDS = [101]
 
 
-def evaluate_tuning_agents(omega_val, mappo_agent, eval_seeds):
+def evaluate_tuning_agents(omega_val, mappo_agent, eval_seeds, num_classrooms, total_students):
     """Evaluates trained MAPPO_CTDE agent across multiple seeds."""
     total_rewards = []
 
     for seed in eval_seeds:
         set_seed(seed)
         eval_env = MultiClassroomEnv(
-            num_classrooms=NUM_CLASSROOMS,
-            total_students=TOTAL_STUDENTS,
+            num_classrooms=num_classrooms,
+            total_students=total_students,
             max_weeks=MAX_WEEKS,
             gamma=omega_val,
             continuous_action=True,
@@ -878,7 +874,7 @@ def evaluate_tuning_agents(omega_val, mappo_agent, eval_seeds):
         agent_idx_map = {aid: idx for idx, aid in enumerate(agent_ids)}
 
         obs = eval_env.reset()
-        n_obs = {aid: normalize_state(obs[aid], TOTAL_STUDENTS) for aid in eval_env.agents}
+        n_obs = {aid: normalize_state(obs[aid], total_students) for aid in eval_env.agents}
         done = False
         total_reward = 0
 
@@ -889,7 +885,7 @@ def evaluate_tuning_agents(omega_val, mappo_agent, eval_seeds):
                 s_tensor = torch.FloatTensor(n_obs[aid]).to(device).unsqueeze(0)
                 with torch.no_grad():
                     action_normalized = mappo_agent.actors[agent_idx].get_deterministic_action(s_tensor)
-                    action_env = action_normalized.cpu().numpy().flatten() * TOTAL_STUDENTS
+                    action_env = action_normalized.cpu().numpy().flatten() * total_students
                 actions[aid] = action_env
 
             next_obs, rewards, dones, _ = eval_env.step(actions)
@@ -897,7 +893,7 @@ def evaluate_tuning_agents(omega_val, mappo_agent, eval_seeds):
             total_reward += sum(rewards.values()) / len(eval_env.agents)
 
             for aid in eval_env.agents:
-                n_obs[aid] = normalize_state(next_obs[aid], TOTAL_STUDENTS)
+                n_obs[aid] = normalize_state(next_obs[aid], total_students)
 
             done = any(dones.values())
 
@@ -934,7 +930,7 @@ def select_best_lr(omega_results):
     return best_lr, best_metrics, selection_info
 
 
-def grid_search_tuning(policy_type='beta'):
+def grid_search_tuning(policy_type='beta', num_classrooms=2, total_students=100):
     """Performs grid search tuning for each omega value."""
     optimized_lrs = {}
 
@@ -953,9 +949,9 @@ def grid_search_tuning(policy_type='beta'):
             print(f"\n  Testing LR={lr:.6f}...")
 
             mappo, history = run_marl_session(omega, TUNE_SEED, lr, TUNE_EPISODES, 
-                                              policy_type=policy_type)
+                                              policy_type=policy_type, num_classrooms=num_classrooms, total_students=total_students)
 
-            avg_reward = evaluate_tuning_agents(omega, mappo, TUNE_EVAL_SEEDS)
+            avg_reward = evaluate_tuning_agents(omega, mappo, TUNE_EVAL_SEEDS, num_classrooms, total_students)
 
             # Aggregate monotonicity across all agents
             total_dom_violations = 0
@@ -963,7 +959,7 @@ def grid_search_tuning(policy_type='beta'):
             total_action_range = 0
 
             for agent_idx in range(mappo.num_agents):
-                policy_grid = extract_policy_grid(mappo, agent_idx)
+                policy_grid = extract_policy_grid(mappo, agent_idx, total_students)
                 dom_score, dom_details = evaluate_dominance_monotonicity(policy_grid)
                 diversity = compute_action_diversity(policy_grid)
 
@@ -1019,7 +1015,7 @@ def load_lrs():
 # 6. FULL TRAINING AND EVALUATION
 # ============================================================
 
-def train_and_evaluate_optimal(optimized_lrs, policy_type='beta'):
+def train_and_evaluate_optimal(optimized_lrs, policy_type='beta', num_classrooms=2, total_students=100):
     """Runs full training with optimized LRs and saves models."""
     print(f"\n--- Starting Full Training with Optimal LRs ({policy_type} policy) ---")
 
@@ -1040,7 +1036,7 @@ def train_and_evaluate_optimal(optimized_lrs, policy_type='beta'):
             print(f"\n  Run {run + 1}/{NUM_RUNS} (seed={seed})")
 
             mappo, history = run_marl_session(omega, seed, lr, FULL_EPISODES,
-                                              policy_type=policy_type)
+                                              policy_type=policy_type, num_classrooms=num_classrooms, total_students=total_students)
             omega_rewards_runs.append(history)
 
             # Save each run's model
@@ -1057,7 +1053,7 @@ def train_and_evaluate_optimal(optimized_lrs, policy_type='beta'):
         total_adj_transitions = 0
 
         for agent_idx in range(representative_agents[omega].num_agents):
-            policy_grid = extract_policy_grid(representative_agents[omega], agent_idx)
+            policy_grid = extract_policy_grid(representative_agents[omega], agent_idx, total_students)
             dom_score, dom_details = evaluate_dominance_monotonicity(policy_grid)
             adj_score, adj_details = evaluate_adjacent_monotonicity(policy_grid)
 
@@ -1089,7 +1085,7 @@ def train_and_evaluate_optimal(optimized_lrs, policy_type='beta'):
 
     # Plot results
     plot_combined_rewards(all_rewards_matrix, NUM_RUNS)
-    plot_policy_strips(representative_agents)
+    plot_policy_strips(representative_agents, total_students)
     plot_monotonicity_summary(final_monotonicity_scores)
 
     print(f"\nTraining complete. Models saved to {MODEL_DIR}")
@@ -1153,7 +1149,7 @@ def plot_combined_rewards(all_rewards_matrix, num_runs):
     plt.close()
 
 
-def plot_policy_strips(representative_agents):
+def plot_policy_strips(representative_agents, total_students):
     """Plots the optimal policy as a heatmap strip for each omega and each agent."""
     print("\n--- Generating Optimal Policy Strips Plot ---")
 
@@ -1174,9 +1170,9 @@ def plot_policy_strips(representative_agents):
 
         for agent_idx in range(num_agents):
             ax = axes[agent_idx, idx]
-            policy_grid = extract_policy_grid(mappo_agent, agent_idx)
+            policy_grid = extract_policy_grid(mappo_agent, agent_idx, total_students)
 
-            im = ax.imshow(policy_grid, extent=[0, 1, 0, TOTAL_STUDENTS],
+            im = ax.imshow(policy_grid, extent=[0, 1, 0, total_students],
                            origin="lower", aspect="auto", cmap=continuous_cmap,
                            vmin=0.0, vmax=1.0)
 
@@ -1241,7 +1237,7 @@ def plot_monotonicity_summary(monotonicity_scores):
 # 8. MAIN CONTROL FUNCTION
 # ============================================================
 
-def main(mode='train', policy_type='beta'):
+def main(mode='train', policy_type='beta', num_classrooms=2, total_students=100):
     """
     Main function to control execution flow.
 
@@ -1255,23 +1251,35 @@ def main(mode='train', policy_type='beta'):
     - 'tanh': Tanh deterministic with noise
     """
     print(f"Policy type: {policy_type}")
+    print(f"Classrooms: {num_classrooms}, Students: {total_students}")
     
     optimized_lrs = {}
 
     if mode == 'tune' or mode == 'tune_and_train':
-        optimized_lrs = grid_search_tuning(policy_type=policy_type)
+        optimized_lrs = grid_search_tuning(policy_type=policy_type, num_classrooms=num_classrooms, total_students=total_students)
     else:
         optimized_lrs = load_lrs()
 
     if mode == 'train' or mode == 'tune_and_train':
-        train_and_evaluate_optimal(optimized_lrs, policy_type=policy_type)
+        train_and_evaluate_optimal(optimized_lrs, policy_type=policy_type, num_classrooms=num_classrooms, total_students=total_students)
 
     print(f"\nAll processing complete. Results in {OUTPUT_DIR}")
 
 
 if __name__ == '__main__':
-    # Use Beta distribution by default
-    main(mode='tune_and_train', policy_type='tanh')
     
-    # To use Tanh deterministic policy instead:
-    # main(mode='tune_and_train', policy_type='tanh')
+    # Define the combinations of classrooms and students to run
+    run_configurations = [
+        {'num_classrooms': 2, 'total_students': 100},
+        {'num_classrooms': 2, 'total_students': 200},
+        {'num_classrooms': 4, 'total_students': 100},
+        {'num_classrooms': 4, 'total_students': 200},
+    ]
+
+    for config in run_configurations:
+        main(
+            mode='tune_and_train', 
+            policy_type='tanh',
+            num_classrooms=config['num_classrooms'], 
+            total_students=config['total_students']
+        )
