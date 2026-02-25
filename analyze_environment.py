@@ -21,6 +21,7 @@ import json
 import time
 import pandas as pd
 import copy
+from itertools import product
 
 from environment.multiclassroom import MultiClassroomEnv
 
@@ -73,8 +74,8 @@ class MyopicAgent:
     def __init__(
         self,
         omega: float,
-        num_classrooms: int = NUM_CLASSROOMS,
-        total_students: int = TOTAL_STUDENTS,
+        num_classrooms: int,
+        total_students: int,
         n_action_bins: int = N_ACTION_BINS
     ):
         self.omega = omega
@@ -225,8 +226,8 @@ class DPUpperBound:
     def __init__(
         self,
         omega: float,
-        num_classrooms: int = NUM_CLASSROOMS,
-        total_students: int = TOTAL_STUDENTS,
+        num_classrooms: int,
+        total_students: int,
         max_weeks: int = MAX_WEEKS,
         n_infected_bins: int = N_INFECTED_BINS,
         n_action_bins: int = N_ACTION_BINS
@@ -299,9 +300,9 @@ class DPUpperBound:
         """
         Run backward induction to compute optimal policy.
         
-        For N=2 classrooms:
-        State: (i1_idx, i2_idx, t)
-        V[t, i1, i2] = max over actions { R + V[t+1, i1', i2'] }
+        For N classrooms:
+        State: (i1_idx, i2_idx, ..., iN_idx, t)
+        V[t, i1, ..., iN] = max over actions { R + V[t+1, i1', ..., iN'] }
         """
         T = self.max_weeks
         n_inf = self.n_infected_bins
@@ -312,19 +313,23 @@ class DPUpperBound:
             print("DP UPPER BOUND SOLVER (Backward Induction)")
             print("=" * 70)
             print(f"Classrooms: {N}, Horizon: {T}, omega: {self.omega}")
-            print(f"State grid: {n_inf}^{N} = {n_inf**N} states per time")
-            print(f"Action grid: {self.n_action_bins}^{N} = {self.n_action_bins**N} joint actions")
+            try:
+                state_size = n_inf**N
+                action_size = self.n_action_bins**N
+                print(f"State grid: {n_inf}^{N} = {state_size} states per time")
+                print(f"Action grid: {self.n_action_bins}^{N} = {action_size} joint actions")
+            except OverflowError:
+                print(f"State grid: {n_inf}^{N} (too large to display)")
+                print(f"Action grid: {self.n_action_bins}^{N} (too large to display)")
             print()
+
+        # Initialize value function: V[t, i1_idx, ..., iN_idx]
+        v_shape = (T + 1,) + tuple([n_inf] * N)
+        self.V = np.zeros(v_shape)
         
-        if N != 2:
-            raise NotImplementedError("Currently only supports 2 classrooms for DP")
-        
-        # Initialize value function: V[t, i1_idx, i2_idx]
-        # V[T, :, :] = 0 (terminal value)
-        self.V = np.zeros((T + 1, n_inf, n_inf))
-        
-        # Policy: policy[t, i1_idx, i2_idx, agent] = action value
-        self.policy = np.zeros((T, n_inf, n_inf, N))
+        # Policy: policy[t, i1_idx, ..., iN_idx, agent_idx] = action value
+        policy_shape = (T,) + tuple([n_inf] * N) + (N,)
+        self.policy = np.zeros(policy_shape)
         
         start_time = time.time()
         
@@ -333,35 +338,41 @@ class DPUpperBound:
             if verbose:
                 print(f"  Processing t={t}...", end=" ", flush=True)
             
-            for i1_idx, i1 in enumerate(self.infected_vals):
-                for i2_idx, i2 in enumerate(self.infected_vals):
-                    infected = [int(i1), int(i2)]
+            # Iterate over all state indices using itertools.product
+            state_indices_product = product(range(n_inf), repeat=N)
+            
+            for state_indices_tuple in state_indices_product:
+                infected = [int(self.infected_vals[i]) for i in state_indices_tuple]
+                
+                best_value = -float('inf')
+                best_actions = [0.0] * N
+                
+                # Grid search over all action combinations
+                action_product = product(self.action_vals, repeat=N)
+                
+                for actions_tuple in action_product:
+                    actions = list(actions_tuple)
                     
-                    best_value = -float('inf')
-                    best_actions = [0.0, 0.0]
+                    # Use environment to compute transition
+                    next_infected, reward = self._simulate_step(infected, actions, t)
                     
-                    # Grid search over all action combinations
-                    for a1 in self.action_vals:
-                        for a2 in self.action_vals:
-                            actions = [a1, a2]
-                            
-                            # Use environment to compute transition
-                            next_infected, reward = self._simulate_step(infected, actions, t)
-                            
-                            # Get next state indices
-                            next_i1_idx = self._get_infected_index(next_infected[0])
-                            next_i2_idx = self._get_infected_index(next_infected[1])
-                            
-                            # Bellman update: Q = R + V_{t+1}
-                            future_value = self.V[t + 1, next_i1_idx, next_i2_idx]
-                            q_value = reward + future_value
-                            
-                            if q_value > best_value:
-                                best_value = q_value
-                                best_actions = actions
+                    # Get next state indices
+                    next_state_indices = tuple([self._get_infected_index(ni) for ni in next_infected])
                     
-                    self.V[t, i1_idx, i2_idx] = best_value
-                    self.policy[t, i1_idx, i2_idx, :] = best_actions
+                    # Bellman update: Q = R + V_{t+1}
+                    future_value = self.V[(t + 1,) + next_state_indices]
+                    q_value = reward + future_value
+                    
+                    if q_value > best_value:
+                        best_value = q_value
+                        best_actions = actions
+                
+                # Update V table and policy table
+                v_index = (t,) + state_indices_tuple
+                policy_index = (t,) + state_indices_tuple
+                
+                self.V[v_index] = best_value
+                self.policy[policy_index] = best_actions
             
             if verbose:
                 avg_v = self.V[t].mean()
@@ -372,9 +383,10 @@ class DPUpperBound:
         if verbose:
             print(f"\nSolve time: {elapsed:.1f}s")
             # Value at typical starting state
-            i1_idx = self._get_infected_index(3)
-            i2_idx = self._get_infected_index(3)
-            print(f"V*(I=(3,3), t=0) = {self.V[0, i1_idx, i2_idx]:.2f}")
+            start_infected = [3] * N
+            start_indices = tuple([self._get_infected_index(i) for i in start_infected])
+            v_index = (0,) + start_indices
+            print(f"V*(I={tuple(start_infected)}, t=0) = {self.V[v_index]:.2f}")
         
         return {
             'V': self.V,
@@ -384,9 +396,16 @@ class DPUpperBound:
     
     def get_optimal_action(self, t: int, infected: List[int]) -> List[float]:
         """Get optimal action for given time and state."""
-        i1_idx = self._get_infected_index(infected[0])
-        i2_idx = self._get_infected_index(infected[1])
-        return list(self.policy[t, i1_idx, i2_idx, :])
+        if self.num_classrooms != len(infected):
+             raise ValueError(f"Number of infected values ({len(infected)}) does not match number of classrooms ({self.num_classrooms})")
+        
+        # Get indices for each infected value
+        state_indices = tuple([self._get_infected_index(i) for i in infected])
+        
+        # Construct index for policy table
+        policy_index = (t,) + state_indices
+        
+        return list(self.policy[policy_index])
     
     def evaluate(
         self, 
@@ -453,8 +472,8 @@ class RandomPolicy:
     def __init__(
         self,
         omega: float,
-        num_classrooms: int = NUM_CLASSROOMS,
-        total_students: int = TOTAL_STUDENTS
+        num_classrooms: int,
+        total_students: int
     ):
         self.omega = omega
         self.num_classrooms = num_classrooms
@@ -664,12 +683,17 @@ def evaluate_centralized_model(
 
 def run_full_analysis(num_classrooms, total_students):
     """Run comprehensive analysis for all omega values."""
+    # Create a specific output directory for this configuration
+    config_output_dir = os.path.join(OUTPUT_DIR, f"{num_classrooms}c_{total_students}s")
+    os.makedirs(config_output_dir, exist_ok=True)
+
     print("=" * 80)
     print("COMPREHENSIVE ENVIRONMENT ANALYSIS")
     print("Multi-Classroom Epidemic Control")
     print("=" * 80)
     print(f"Classrooms: {num_classrooms}, Students: {total_students}, Horizon: {MAX_WEEKS}")
     print(f"Omega values: {OMEGA_VALUES}")
+    print(f"Results will be saved in: {config_output_dir}")
     print()
     
     results = {}
@@ -682,20 +706,24 @@ def run_full_analysis(num_classrooms, total_students):
         results[omega] = {}
         
         # 1. DP Upper Bound
-        print("\n[1] Computing DP Upper Bound...")
-        dp_solver = DPUpperBound(
-            omega=omega,
-            num_classrooms=num_classrooms,
-            total_students=total_students,
-            n_infected_bins=N_INFECTED_BINS,
-            n_action_bins=N_ACTION_BINS
-        )
-        dp_solver.solve(verbose=True)
-        
-        print("  Evaluating DP policy...")
-        dp_mean, dp_std, _ = dp_solver.evaluate()
-        results[omega]['dp'] = {'mean': dp_mean, 'std': dp_std}
-        print(f"  DP Reward: {dp_mean:.2f} ± {dp_std:.2f}")
+        if num_classrooms > 2:
+            print("\n[1] Skipping DP Upper Bound (too slow for N > 2)...")
+            results[omega]['dp'] = {'mean': np.nan, 'std': np.nan}
+        else:
+            print("\n[1] Computing DP Upper Bound...")
+            dp_solver = DPUpperBound(
+                omega=omega,
+                num_classrooms=num_classrooms,
+                total_students=total_students,
+                n_infected_bins=N_INFECTED_BINS,
+                n_action_bins=N_ACTION_BINS
+            )
+            dp_solver.solve(verbose=True)
+            
+            print("  Evaluating DP policy...")
+            dp_mean, dp_std, _ = dp_solver.evaluate()
+            results[omega]['dp'] = {'mean': dp_mean, 'std': dp_std}
+            print(f"  DP Reward: {dp_mean:.2f} ± {dp_std:.2f}")
         
         # 2. Myopic Optimal
         print("\n[2] Evaluating Myopic Optimal...")
@@ -732,14 +760,14 @@ def run_full_analysis(num_classrooms, total_students):
         print(f"  Random Reward: {random_mean:.2f} ± {random_std:.2f}")
     
     # Generate outputs
-    generate_summary_table(results)
-    generate_comparison_plot(results)
-    save_results(results)
+    generate_summary_table(results, config_output_dir)
+    generate_comparison_plot(results, config_output_dir, num_classrooms, total_students)
+    save_results(results, config_output_dir)
     
     return results
 
 
-def generate_summary_table(results: Dict):
+def generate_summary_table(results: Dict, output_dir: str):
     """Generate and print summary table."""
     print("\n" + "=" * 100)
     print("SUMMARY TABLE")
@@ -763,27 +791,28 @@ def generate_summary_table(results: Dict):
         }
         rows.append(row)
         
+        dp_str = f"{row['dp_mean']:.1f}±{row['dp_std']:.1f}" if not np.isnan(row['dp_mean']) else "N/A"
         cent_str = f"{row['centralized_mean']:.1f}" if not np.isnan(row['centralized_mean']) else "N/A"
         ctde_str = f"{row['ctde_mean']:.1f}" if not np.isnan(row['ctde_mean']) else "N/A"
         
         print(f"omega={omega}: "
-              f"DP={row['dp_mean']:.1f}±{row['dp_std']:.1f}, "
+              f"DP={dp_str}, "
               f"Myopic={row['myopic_mean']:.1f}±{row['myopic_std']:.1f}, "
               f"Cent={cent_str}, CTDE={ctde_str}, "
               f"Random={row['random_mean']:.1f}")
     
     # Save to CSV
     df = pd.DataFrame(rows)
-    csv_path = os.path.join(OUTPUT_DIR, "analysis_results.csv")
+    csv_path = os.path.join(output_dir, "analysis_results.csv")
     df.to_csv(csv_path, index=False)
     print(f"\nResults saved to {csv_path}")
 
 
-def generate_comparison_plot(results: Dict):
+def generate_comparison_plot(results: Dict, output_dir: str, num_classrooms: int, total_students: int):
     """Generate comparison bar chart."""
     print("\n--- Generating Comparison Plot ---")
     
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=(14, 7))
     
     x = np.arange(len(OMEGA_VALUES))
     width = 0.15
@@ -795,33 +824,37 @@ def generate_comparison_plot(results: Dict):
     for i, (method, color, label) in enumerate(zip(methods, colors, labels)):
         means = []
         stds = []
+        valid_data = False
         for omega in OMEGA_VALUES:
-            if results[omega].get(method) and results[omega][method] is not None:
+            if results[omega].get(method) and results[omega][method] is not None and not np.isnan(results[omega][method]['mean']):
                 means.append(results[omega][method]['mean'])
                 stds.append(results[omega][method]['std'])
+                valid_data = True
             else:
                 means.append(0)
                 stds.append(0)
         
-        offset = (i - len(methods) / 2 + 0.5) * width
-        ax.bar(x + offset, means, width, yerr=stds, label=label, color=color, capsize=2)
+        if valid_data:
+            offset = (i - len(methods) / 2 + 0.5) * width
+            ax.bar(x + offset, means, width, yerr=stds, label=label, color=color, capsize=2)
     
     ax.set_xlabel('Omega', fontweight='bold')
     ax.set_ylabel('Reward', fontweight='bold')
-    ax.set_title('Performance Comparison: Multi-Classroom Epidemic Control', fontweight='bold')
+    title = (f'Performance Comparison: {num_classrooms} Classrooms, {total_students} Students')
+    ax.set_title(title, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{o}' for o in OMEGA_VALUES])
-    ax.legend(loc='upper left')
+    ax.legend(loc='best')
     ax.grid(axis='y', linestyle='--', alpha=0.6)
     
     plt.tight_layout()
-    plot_path = os.path.join(OUTPUT_DIR, "performance_comparison.png")
+    plot_path = os.path.join(output_dir, "performance_comparison.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Plot saved to {plot_path}")
 
 
-def save_results(results: Dict):
+def save_results(results: Dict, output_dir: str):
     """Save results to JSON."""
     serializable = {}
     for omega in OMEGA_VALUES:
@@ -833,7 +866,7 @@ def save_results(results: Dict):
                     'std': float(results[omega][method]['std'])
                 }
     
-    json_path = os.path.join(OUTPUT_DIR, "analysis_results.json")
+    json_path = os.path.join(output_dir, "analysis_results.json")
     with open(json_path, 'w') as f:
         json.dump(serializable, f, indent=4)
     print(f"Results saved to {json_path}")
