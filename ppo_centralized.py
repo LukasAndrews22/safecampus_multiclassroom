@@ -153,7 +153,8 @@ class TanhDeterministicActor(nn.Module):
         action = (tanh_out + 1.0) / 2.0  # [0, 1]
         return action
 
-    def act(self, state, add_noise=True):
+    @torch.jit.export
+    def act(self, state, add_noise):
         """
         Get action with optional exploration noise.
         
@@ -283,7 +284,7 @@ class CentralizedPPO:
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
 
-        self.scaler = torch.cuda.amp.GradScaler()
+        self.scaler = torch.amp.GradScaler('cuda')
         self.MseLoss = nn.MSELoss()
 
     def select_actions(self, global_state, add_noise=True):
@@ -346,7 +347,7 @@ class CentralizedPPO:
 
         # PPO update epochs
         for _ in range(self.K_epochs):
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type='cuda'):
                 # Evaluate current policy
                 logprobs, entropy = self.actor.evaluate(old_states, old_actions)
                 logprobs = logprobs.squeeze()
