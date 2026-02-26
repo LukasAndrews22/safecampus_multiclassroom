@@ -283,7 +283,7 @@ class CentralizedPPO:
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
 
-        self.scaler = torch.cuda.amp.GradScaler()
+        self.scaler = torch.amp.GradScaler()
         self.MseLoss = nn.MSELoss()
 
     def select_actions(self, global_state, add_noise=True):
@@ -346,7 +346,7 @@ class CentralizedPPO:
 
         # PPO update epochs
         for _ in range(self.K_epochs):
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type=device.type):
                 # Evaluate current policy
                 logprobs, entropy = self.actor.evaluate(old_states, old_actions)
                 logprobs = logprobs.squeeze()
