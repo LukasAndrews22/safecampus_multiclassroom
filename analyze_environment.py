@@ -35,15 +35,15 @@ MAX_WEEKS = 15
 COMMUNITY_RISK_FILE = "weekly_risk_sample_b.csv"
 
 # DP Discretization
-N_INFECTED_BINS = 21
-N_ACTION_BINS = 11  # Actions: 0, 10, 20, ..., 100
+N_INFECTED_BINS = 5
+N_ACTION_BINS = 5  # Actions: 0, 10, 20, ..., 100
 
 # Evaluation
-NUM_EVAL_EPISODES = 30
+NUM_EVAL_EPISODES = 1
 EVAL_SEED = 42
 
 # Omega values to analyze
-OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+OMEGA_VALUES = [0.5]
 
 plt.rcParams.update({
     'font.size': 12,
@@ -88,22 +88,7 @@ class MyopicAgent:
     
     def _create_env_copy(self, env: MultiClassroomEnv) -> MultiClassroomEnv:
         """Create a copy of environment state for lookahead."""
-        env_copy = MultiClassroomEnv(
-            num_classrooms=self.num_classrooms,
-            total_students=self.total_students,
-            max_weeks=MAX_WEEKS,
-            gamma=self.omega,
-            continuous_action=True,
-            cooperative_reward=True,
-            eval_mode=True,
-            community_risk_data_file=COMMUNITY_RISK_FILE
-        )
-        # Copy current state
-        env_copy.student_status = list(env.student_status)
-        env_copy.current_week = env.current_week
-        if hasattr(env, 'shared_community_risk'):
-            env_copy.shared_community_risk = env.shared_community_risk.copy()
-        return env_copy
+        return copy.deepcopy(env)
     
     def select_action(self, env: MultiClassroomEnv) -> List[float]:
         """
@@ -546,13 +531,20 @@ def evaluate_ctde_model(
                 print("    Could not import CTDE module")
                 return None, None, None
         
-        model_path = f"mappo_results/models/mappo_omega_{omega}_run_0"
+        model_path = f"mappo_results/models/mappo_C{num_classrooms}_S{total_students}_omega_{omega}_run_0"
         if not os.path.exists(model_path + '.pt'):
             print(f"    CTDE model not found: {model_path}.pt")
             return None, None, None
         
         model = MAPPO_CTDE.load(model_path)
-        device = torch.device("cpu")
+
+        # Auto-detect device to match model's device
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
         
         set_seed(seed)
         episode_rewards = []
@@ -609,13 +601,20 @@ def evaluate_centralized_model(
         import torch
         from ppo_centralized import CentralizedPPO
         
-        model_path = f"centralized_ppo_results/models/centralized_omega_{omega}_run_0"
+        model_path = f"centralized_ppo_results/models/centralized_C{num_classrooms}_S{total_students}_omega_{omega}_run_0"
         if not os.path.exists(model_path + '.pt'):
             print(f"    Centralized model not found: {model_path}.pt")
             return None, None, None
         
         model = CentralizedPPO.load(model_path)
-        device = torch.device("cpu")
+
+        # Auto-detect device to match model's device
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
         
         set_seed(seed)
         episode_rewards = []
@@ -881,9 +880,6 @@ if __name__ == "__main__":
     # Define the combinations of classrooms and students to run
     run_configurations = [
         {'num_classrooms': 2, 'total_students': 100},
-        {'num_classrooms': 2, 'total_students': 200},
-        {'num_classrooms': 4, 'total_students': 100},
-        {'num_classrooms': 4, 'total_students': 200},
     ]
 
     for config in run_configurations:

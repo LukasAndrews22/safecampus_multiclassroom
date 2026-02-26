@@ -791,7 +791,7 @@ def train_and_evaluate_optimal(optimized_lrs, num_classrooms, total_students):
             ppo, history = run_centralized_training(omega, seed, lr, FULL_EPISODES, num_classrooms, total_students)
 
             # Save model
-            model_path = os.path.join(MODEL_DIR, f"centralized_omega_{omega}_run_{run}")
+            model_path = os.path.join(MODEL_DIR, f"centralized_C{num_classrooms}_S{total_students}_omega_{omega}_run_{run}")
             ppo.save(model_path)
 
             if run == 0:
