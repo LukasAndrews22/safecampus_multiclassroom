@@ -154,7 +154,7 @@ class TanhDeterministicActor(nn.Module):
         return action
 
     @torch.jit.export
-    def act(self, state, add_noise):
+    def act(self, state, add_noise: bool):
         """
         Get action with optional exploration noise.
         
