@@ -5,6 +5,7 @@ from environment.simulation import simulate_infections_n_classrooms
 import itertools
 import random
 import os
+import copy
 
 
 class MultiClassroomEnv(ParallelEnv):
@@ -199,3 +200,10 @@ class MultiClassroomEnv(ParallelEnv):
 
     def render(self):
         pass
+
+    def clone(self):
+        """
+        Creates a deep copy of the environment in its current state.
+        Faster than creating a new environment from scratch.
+        """
+        return copy.deepcopy(self)

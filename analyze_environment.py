@@ -85,25 +85,6 @@ class MyopicAgent:
         self.action_options = np.linspace(0, total_students, n_action_bins)
         self.n_actions = n_action_bins
     
-    def _create_env_copy(self, env: MultiClassroomEnv) -> MultiClassroomEnv:
-        """Create a copy of environment state for lookahead."""
-        env_copy = MultiClassroomEnv(
-            num_classrooms=self.num_classrooms,
-            total_students=self.total_students,
-            max_weeks=MAX_WEEKS,
-            gamma=self.omega,
-            continuous_action=True,
-            cooperative_reward=True,
-            eval_mode=True,
-            community_risk_data_file=COMMUNITY_RISK_FILE
-        )
-        # Copy current state
-        env_copy.student_status = list(env.student_status)
-        env_copy.current_week = env.current_week
-        if hasattr(env, 'shared_community_risk'):
-            env_copy.shared_community_risk = env.shared_community_risk.copy()
-        return env_copy
-    
     def select_action(self, env: MultiClassroomEnv) -> List[float]:
         """
         Select best joint action via grid search.
@@ -120,7 +101,7 @@ class MyopicAgent:
             for a1 in self.action_options:
                 for a2 in self.action_options:
                     # Create a copy to test this action
-                    env_copy = self._create_env_copy(env)
+                    env_copy = env.clone()
                     
                     actions_for_env = {
                         agent_ids[0]: np.array([a1]),
@@ -140,7 +121,7 @@ class MyopicAgent:
             for actions_tuple in product(self.action_options, repeat=self.num_classrooms):
                 actions = list(actions_tuple)
                 
-                env_copy = self._create_env_copy(env)
+                env_copy = env.clone()
                 
                 actions_for_env = {
                     aid: np.array([actions[i]])
@@ -269,32 +250,6 @@ class DPUpperBound:
         env.current_week = week
         return env
     
-    def _simulate_step(
-        self, 
-        infected: List[int], 
-        actions: List[float], 
-        week: int
-    ) -> Tuple[List[int], float]:
-        """
-        Simulate one step using actual environment.
-        
-        Returns: (next_infected, reward)
-        """
-        env = self._create_env_at_state(infected, week)
-        agent_ids = sorted(env.agents)
-        
-        actions_for_env = {
-            aid: np.array([actions[i]])
-            for i, aid in enumerate(agent_ids)
-        }
-        
-        _, rewards, _, _ = env.step(actions_for_env)
-        
-        next_infected = list(env.student_status)
-        reward = sum(rewards.values()) / len(agent_ids)
-        
-        return next_infected, reward
-    
     def solve(self, verbose: bool = True) -> Dict:
         """
         Run backward induction to compute optimal policy.
@@ -345,6 +300,10 @@ class DPUpperBound:
                 
                 best_value = -float('inf')
                 best_actions = [0.0] * N
+
+                # Create a single environment for the current state
+                env_for_state = self._create_env_at_state(infected, t)
+                agent_ids = sorted(env_for_state.agents)
                 
                 # Grid search over all action combinations
                 action_product = product(self.action_vals, repeat=N)
@@ -352,8 +311,18 @@ class DPUpperBound:
                 for actions_tuple in action_product:
                     actions = list(actions_tuple)
                     
+                    # Clone the environment for this action test (much faster)
+                    env_copy = env_for_state.clone()
+                    
+                    actions_for_env = {
+                        aid: np.array([actions[i]])
+                        for i, aid in enumerate(agent_ids)
+                    }
+                    
                     # Use environment to compute transition
-                    next_infected, reward = self._simulate_step(infected, actions, t)
+                    _, rewards, _, _ = env_copy.step(actions_for_env)
+                    next_infected = list(env_copy.student_status)
+                    reward = sum(rewards.values()) / len(agent_ids)
                     
                     # Get next state indices
                     next_state_indices = tuple([self._get_infected_index(ni) for ni in next_infected])
