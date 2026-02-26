@@ -42,7 +42,7 @@ GAE_LAMBDA = 0.95
 K_EPOCHS = 20
 EPS_CLIP = 0.2
 MAX_WEEKS = 15
-UPDATE_TIMESTEP = 8192  # Increased for better GPU utilization on high-end cards. Lower this for GPUs with less VRAM.
+UPDATE_TIMESTEP = 2000
 FULL_EPISODES = 3000
 TUNE_EPISODES = 3000
 LR_CANDIDATES = [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.1]
@@ -69,7 +69,6 @@ NUM_RUNS = 1
 if torch.cuda.is_available():
     device = torch.device("cuda")
     print("Using GPU: CUDA")
-    torch.backends.cudnn.benchmark = True
 elif torch.backends.mps.is_available():
     device = torch.device("mps")
     print("Using GPU: MPS (Apple Metal)")
@@ -409,18 +408,18 @@ class MAPPO_CTDE:
 
         # Decentralized actors - one per agent
         self.actors = [
-            torch.jit.script(ActorClass(state_dim, action_dim, actor_hidden_dim, actor_num_layers)).to(device)
+            ActorClass(state_dim, action_dim, actor_hidden_dim, actor_num_layers).to(device)
             for _ in range(num_agents)
         ]
         self.actors_old = [
-            torch.jit.script(ActorClass(state_dim, action_dim, actor_hidden_dim, actor_num_layers)).to(device)
+            ActorClass(state_dim, action_dim, actor_hidden_dim, actor_num_layers).to(device)
             for _ in range(num_agents)
         ]
         for i in range(num_agents):
             self.actors_old[i].load_state_dict(self.actors[i].state_dict())
 
         # Centralized critic - shared by all agents
-        self.critic = torch.jit.script(CentralizedCritic(global_state_dim, critic_hidden_dim, critic_num_layers)).to(device)
+        self.critic = CentralizedCritic(global_state_dim, critic_hidden_dim, critic_num_layers).to(device)
 
         # Separate optimizers
         self.actor_optimizers = [
@@ -428,7 +427,6 @@ class MAPPO_CTDE:
         ]
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr_critic)
 
-        self.scaler = torch.cuda.amp.GradScaler()
         self.MseLoss = nn.MSELoss()
 
     def select_action(self, agent_idx, state):
@@ -438,7 +436,7 @@ class MAPPO_CTDE:
         return action.cpu().numpy().flatten(), logprob
 
     def update(self, buffers):
-        """Update all actors and the shared critic using collected experiences with GAE and AMP."""
+        """Update all actors and the shared critic using collected experiences with GAE."""
         agent_data = []
         
         for agent_idx, (agent_id, buffer) in enumerate(sorted(buffers.items())):
@@ -494,7 +492,6 @@ class MAPPO_CTDE:
 
         # PPO update epochs
         for _ in range(self.K_epochs):
-            all_critic_losses = []
             for data in agent_data:
                 agent_idx = data['agent_idx']
                 advantages = data['advantages']
@@ -504,45 +501,41 @@ class MAPPO_CTDE:
                 old_actions = data['old_actions']
                 old_logprobs = data['old_logprobs']
 
-                with torch.cuda.amp.autocast():
-                    # Evaluate actions with current policy
-                    logprobs, entropy = self.actors[agent_idx].evaluate(old_states, old_actions)
-                    logprobs = logprobs.squeeze()
+                # Evaluate actions with current policy
+                logprobs, entropy = self.actors[agent_idx].evaluate(old_states, old_actions)
+                logprobs = logprobs.squeeze()
 
-                    # Normalize advantages
-                    if len(advantages) > 1:
-                        advantages_normalized = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                    else:
-                        advantages_normalized = advantages
+                # Normalize advantages
+                if len(advantages) > 1:
+                    advantages_normalized = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                else:
+                    advantages_normalized = advantages
 
-                    # Compute policy ratio
-                    ratios = torch.exp(logprobs - old_logprobs)
+                # Compute policy ratio
+                ratios = torch.exp(logprobs - old_logprobs)
 
-                    # Clipped surrogate objective
-                    surr1 = ratios * advantages_normalized
-                    surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages_normalized
+                # Clipped surrogate objective
+                surr1 = ratios * advantages_normalized
+                surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages_normalized
 
-                    # Actor loss
-                    actor_loss = -torch.min(surr1, surr2).mean() - 0.01 * entropy.mean()
-
-                    # Critic loss
-                    state_values = self.critic(old_global_states).squeeze()
-                    critic_loss = self.MseLoss(state_values, returns)
-                    all_critic_losses.append(critic_loss)
+                # Actor loss (negative because we want to maximize)
+                actor_loss = -torch.min(surr1, surr2).mean() - 0.01 * entropy.mean()
 
                 # Update actor
                 self.actor_optimizers[agent_idx].zero_grad()
-                self.scaler.scale(actor_loss).backward()
-                self.scaler.step(self.actor_optimizers[agent_idx])
+                actor_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.actors[agent_idx].parameters(), 0.5)
+                self.actor_optimizers[agent_idx].step()
 
-            # Update shared critic once per epoch with the mean loss
-            if all_critic_losses:
-                critic_loss_mean = torch.stack(all_critic_losses).mean()
+                # Critic loss
+                state_values = self.critic(old_global_states).squeeze()
+                critic_loss = self.MseLoss(state_values, returns)
+
+                # Update critic
                 self.critic_optimizer.zero_grad()
-                self.scaler.scale(critic_loss_mean).backward()
-                self.scaler.step(self.critic_optimizer)
-
-            self.scaler.update()
+                critic_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+                self.critic_optimizer.step()
 
         # Sync old policies
         for i in range(self.num_agents):

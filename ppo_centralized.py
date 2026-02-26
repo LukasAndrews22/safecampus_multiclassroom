@@ -42,7 +42,7 @@ GAE_LAMBDA = 0.95
 K_EPOCHS = 20
 EPS_CLIP = 0.2
 MAX_WEEKS = 15
-UPDATE_TIMESTEP = 8192  # Increased for better GPU utilization on high-end cards. Lower this for GPUs with less VRAM.
+UPDATE_TIMESTEP = 2000
 FULL_EPISODES = 3000
 TUNE_EPISODES = 3000
 LR_CANDIDATES = [0.0001, 0.0003, 0.001, 0.003, 0.005, 0.01]
@@ -65,7 +65,6 @@ NUM_RUNS = 1
 if torch.cuda.is_available():
     device = torch.device("cuda")
     print("Using GPU: CUDA")
-    torch.backends.cudnn.benchmark = True
 elif torch.backends.mps.is_available():
     device = torch.device("mps")
     print("Using GPU: MPS (Apple Metal)")
@@ -273,18 +272,18 @@ class CentralizedPPO:
         self.K_epochs = K_EPOCHS
 
         # Actor and Critic networks (TanhDeterministicActor - same as CTDE)
-        self.actor = torch.jit.script(TanhDeterministicActor(global_state_dim, num_actions, hidden_dim, num_layers)).to(device)
-        self.critic = torch.jit.script(Critic(global_state_dim, hidden_dim, num_layers)).to(device)
+        self.actor = TanhDeterministicActor(global_state_dim, num_actions, hidden_dim, num_layers).to(device)
+        self.critic = Critic(global_state_dim, hidden_dim, num_layers).to(device)
         
         # Old actor for PPO ratio computation
-        self.actor_old = torch.jit.script(TanhDeterministicActor(global_state_dim, num_actions, hidden_dim, num_layers)).to(device)
+        self.actor_old = TanhDeterministicActor(global_state_dim, num_actions, hidden_dim, num_layers).to(device)
         self.actor_old.load_state_dict(self.actor.state_dict())
 
         # Optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
 
-        self.scaler = torch.amp.GradScaler('cuda')
+        self.scaler = torch.cuda.amp.GradScaler()
         self.MseLoss = nn.MSELoss()
 
     def select_actions(self, global_state, add_noise=True):
@@ -305,7 +304,7 @@ class CentralizedPPO:
         return actions.squeeze(0).cpu().numpy(), log_prob, value
 
     def update(self, buffer):
-        """Update policy using PPO with GAE and AMP."""
+        """Update policy using PPO with GAE."""
         if len(buffer) == 0:
             return
 
@@ -347,38 +346,36 @@ class CentralizedPPO:
 
         # PPO update epochs
         for _ in range(self.K_epochs):
-            with torch.amp.autocast(device_type='cuda'):
+            with torch.cuda.amp.autocast():
                 # Evaluate current policy
                 logprobs, entropy = self.actor.evaluate(old_states, old_actions)
                 logprobs = logprobs.squeeze()
 
-                # Compute ratio (pi_new / pi_old)
-                ratios = torch.exp(logprobs - old_logprobs)
+            # Compute ratio (pi_new / pi_old)
+            ratios = torch.exp(logprobs - old_logprobs)
 
-                # Clipped surrogate objective
-                surr1 = ratios * advantages
-                surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-                
-                # Actor loss (no entropy bonus for deterministic policy)
-                actor_loss = -torch.min(surr1, surr2).mean()
+            # Clipped surrogate objective
+            surr1 = ratios * advantages
+            surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+            
+            # Actor loss (no entropy bonus for deterministic policy)
+            actor_loss = -torch.min(surr1, surr2).mean()
 
-                # Critic loss
-                state_values = self.critic(old_states).squeeze()
-                critic_loss = self.MseLoss(state_values, returns)
-                
-                # Total loss
-                loss = actor_loss + 0.5 * critic_loss
-
-            # Update actor and critic
+            # Update actor
             self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+            self.actor_optimizer.step()
+
+            # Critic loss
+            state_values = self.critic(old_states).squeeze()
+            critic_loss = self.MseLoss(state_values, returns)
+
+            # Update critic
             self.critic_optimizer.zero_grad()
-            
-            self.scaler.scale(loss).backward()
-            
-            self.scaler.step(self.actor_optimizer)
-            self.scaler.step(self.critic_optimizer)
-            
-            self.scaler.update()
+            critic_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+            self.critic_optimizer.step()
 
         # Sync old policy
         self.actor_old.load_state_dict(self.actor.state_dict())
