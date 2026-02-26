@@ -20,6 +20,7 @@ import os
 import json
 import time
 import pandas as pd
+import copy
 from itertools import product
 
 from environment.multiclassroom import MultiClassroomEnv
@@ -31,7 +32,7 @@ OUTPUT_DIR = "analysis_results_0.8_gamma"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 MAX_WEEKS = 15
-COMMUNITY_RISK_FILE = None
+COMMUNITY_RISK_FILE = "weekly_risk_sample_b.csv"
 
 # DP Discretization
 N_INFECTED_BINS = 21
