@@ -1,9 +1,6 @@
 gymnasium
 matplotlib
 numpy
-optuna
 pandas
 pettingzoo
-psutil
 torch
-tqdm
