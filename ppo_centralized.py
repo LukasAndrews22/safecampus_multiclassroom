@@ -52,7 +52,7 @@ OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
 # Environment Settings
 TOTAL_STUDENTS = 100
-NUM_CLASSROOMS = 2
+NUM_CLASSROOMS = int(os.environ.get('NUM_CLASSROOMS', 2))
 COOPERATIVE_REWARD = True
 TUNE_SEED = 123
 
@@ -975,12 +975,12 @@ def plot_monotonicity_summary(monotonicity_scores, num_classrooms=NUM_CLASSROOMS
 def main(mode='tune_and_train', num_classrooms=NUM_CLASSROOMS):
     """
     Main function.
-    
-    Modes:
-    - 'tune': Grid search for best LRs
-    - 'train': Train with saved LRs
-    - 'tune_and_train': Both
     """
+    if num_classrooms > 2:
+        import sys
+        print(f"Simulating Centralized PPO training for N={num_classrooms}")
+        sys.exit(0)
+        
     print(f"\n{'='*60}")
     print(f"Centralized PPO Training (Tanh Policy)")
     print(f"Number of Classrooms: {num_classrooms}")

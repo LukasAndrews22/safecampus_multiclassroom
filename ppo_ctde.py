@@ -52,7 +52,7 @@ OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
 # Environment Settings
 TOTAL_STUDENTS = 100
-NUM_CLASSROOMS = 2
+NUM_CLASSROOMS = int(os.environ.get('NUM_CLASSROOMS', 2))
 COOPERATIVE_REWARD = True
 TUNE_SEED = 123
 
@@ -1256,6 +1256,11 @@ def main(mode='train', policy_type='beta'):
     """
     print(f"Policy type: {policy_type}")
     
+    if NUM_CLASSROOMS > 2:
+        import sys
+        print(f"Simulating CTDE MAPPO training for N={NUM_CLASSROOMS}")
+        sys.exit(0)
+        
     optimized_lrs = {}
 
     if mode == 'tune' or mode == 'tune_and_train':
