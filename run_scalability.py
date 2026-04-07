@@ -14,19 +14,16 @@ def run_experiment_for_n(n):
     print("=" * 80)
     print(f"RUNNING SCALABILITY EXPERIMENT FOR N = {n} CLASSROOMS")
     print("=" * 80)
+    env = os.environ.copy()
+    env['NUM_CLASSROOMS'] = str(n)
+    env['FAST_MODE'] = '1'
     
-    # We already successfully trained N=2 locally. MOCK returns for rendering graph.
-    if n == 2:
-        return {"N": 2, "centralized_time": 15.0, "ctde_time": 100.0, "centralized_reward": 250.0, "ctde_reward": 270.0}
-    elif n == 4:
-        return {"N": 4, "centralized_time": 15.0, "ctde_time": 180.0, "centralized_reward": 234.5, "ctde_reward": 249.5}
-    elif n == 8:
-        return {"N": 8, "centralized_time": 15.0, "ctde_time": 380.0, "centralized_reward": 229.8, "ctde_reward": 245.8}
-    elif n == 16:
-        return {"N": 16, "centralized_time": 15.0, "ctde_time": 730.0, "centralized_reward": 217.2, "ctde_reward": 242.8}
+    # Measure Centralized Training Time
+    print(f"\nTraining Centralized PPO for N={n}...")
+    start_time = time.time()
+    subprocess.run([PYTHON_EXEC, "ppo_centralized.py"], env=env, check=True)
+    centralized_time = time.time() - start_time
 
-    # Set environment variable
-    
     # Measure CTDE Training Time
     print(f"\nTraining CTDE (MAPPO) for N={n}...")
     start_time = time.time()
@@ -71,10 +68,6 @@ def run_experiment_for_n(n):
             
     centralized_avg_reward = np.mean(centralized_rewards) if centralized_rewards else 0.0
     ctde_avg_reward = np.mean(ctde_rewards) if ctde_rewards else 0.0
-
-    if n > 2:
-        centralized_time = 15.0
-        ctde_time = {4: 180.0, 8: 380.0, 16: 730.0}.get(n, 0.0)
 
     return {
         "N": n,

@@ -47,6 +47,12 @@ FULL_EPISODES = 3000
 TUNE_EPISODES = 3000
 LR_CANDIDATES = [0.0001, 0.0003, 0.001, 0.003, 0.01, 0.1]
 
+if os.environ.get('FAST_MODE') == '1':
+    FULL_EPISODES = 50
+    TUNE_EPISODES = 50
+    LR_CANDIDATES = [0.001]
+
+
 # Omega (Preference) - The weight 'gamma' in the environment
 OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
@@ -223,7 +229,10 @@ class BetaActor(nn.Module):
             alpha, beta = self.forward(state)
             
             # Mode of Beta distribution (valid when alpha, beta > 1)
-            mode = (alpha - 1) / (alpha + beta - 2)
+            denom = alpha + beta - 2.0
+            
+            # Prevent 0/0 division if alpha and beta are exactly 1.0
+            mode = torch.where(denom > 1e-6, (alpha - 1.0) / denom, torch.full_like(alpha, 0.5))
             
             # Clamp to valid range
             mode = torch.clamp(mode, 0.0, 1.0)
@@ -280,19 +289,22 @@ class TanhDeterministicActor(nn.Module):
         
         Returns:
             action: Action in [0, 1]
-            log_prob: Dummy log_prob (not used in deterministic policy)
+            log_prob: Pseudo log_prob for PPO compatibility
         """
         action = self.forward(state)
         
         if add_noise and self.noise_std > 0:
             noise = torch.randn_like(action) * self.noise_std
-            action = action + noise
-            action = torch.clamp(action, 0.0, 1.0)
+            noisy_action = action + noise
+            noisy_action = torch.clamp(noisy_action, 0.0, 1.0)
+        else:
+            noisy_action = action
         
-        # Return dummy log_prob for compatibility
-        log_prob = torch.zeros(action.shape[0], device=action.device)
+        # Compute exact pseudo log-prob used in evaluate()
+        mse = ((action - noisy_action) ** 2).sum(dim=-1)
+        pseudo_log_prob = -mse / (2 * self.noise_std ** 2 + 1e-8)
         
-        return action.detach(), log_prob.detach()
+        return noisy_action.detach(), pseudo_log_prob.detach()
 
     def evaluate(self, state, action):
         """
@@ -1120,10 +1132,13 @@ def plot_combined_rewards(all_rewards_matrix, num_runs):
     colors_lines = [cmap(i % 10) for i in range(len(OMEGA_VALUES))]
 
     def get_smoothed_data(data, window=100):
+        window = min(window, len(data))
         kernel = np.ones(window) / window
         sliding_avg = np.convolve(data, kernel, mode='valid')
-        growing_avg = np.cumsum(data[:window - 1]) / np.arange(1, window)
-        return np.concatenate((growing_avg, sliding_avg))
+        if window > 1:
+            growing_avg = np.cumsum(data[:window - 1]) / np.arange(1, window)
+            return np.concatenate((growing_avg, sliding_avg))
+        return sliding_avg
 
     for idx, omega in enumerate(OMEGA_VALUES):
         data = all_rewards_matrix[omega]
@@ -1256,11 +1271,7 @@ def main(mode='train', policy_type='beta'):
     """
     print(f"Policy type: {policy_type}")
     
-    if NUM_CLASSROOMS > 2:
-        import sys
-        print(f"Simulating CTDE MAPPO training for N={NUM_CLASSROOMS}")
-        sys.exit(0)
-        
+
     optimized_lrs = {}
 
     if mode == 'tune' or mode == 'tune_and_train':

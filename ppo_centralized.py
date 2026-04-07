@@ -47,6 +47,12 @@ FULL_EPISODES = 3000
 TUNE_EPISODES = 3000
 LR_CANDIDATES = [0.0001, 0.0003, 0.001, 0.003, 0.005, 0.01]
 
+if os.environ.get('FAST_MODE') == '1':
+    FULL_EPISODES = 50
+    TUNE_EPISODES = 50
+    LR_CANDIDATES = [0.001]
+
+
 # Omega (Preference weight)
 OMEGA_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
@@ -161,19 +167,22 @@ class TanhDeterministicActor(nn.Module):
         
         Returns:
             action: Action in [0, 1]
-            log_prob: Dummy log_prob (not used in deterministic policy)
+            log_prob: Pseudo log_prob for PPO compatibility
         """
         action = self.forward(state)
         
         if add_noise and self.noise_std > 0:
             noise = torch.randn_like(action) * self.noise_std
-            action = action + noise
-            action = torch.clamp(action, 0.0, 1.0)
+            noisy_action = action + noise
+            noisy_action = torch.clamp(noisy_action, 0.0, 1.0)
+        else:
+            noisy_action = action
         
-        # Return dummy log_prob for compatibility
-        log_prob = torch.zeros(action.shape[0], device=action.device)
+        # Compute exact pseudo log-prob used in evaluate()
+        mse = ((action - noisy_action) ** 2).sum(dim=-1)
+        pseudo_log_prob = -mse / (2 * self.noise_std ** 2 + 1e-8)
         
-        return action.detach(), log_prob.detach()
+        return noisy_action.detach(), pseudo_log_prob.detach()
 
     def evaluate(self, state, action):
         """
@@ -976,11 +985,7 @@ def main(mode='tune_and_train', num_classrooms=NUM_CLASSROOMS):
     """
     Main function.
     """
-    if num_classrooms > 2:
-        import sys
-        print(f"Simulating Centralized PPO training for N={num_classrooms}")
-        sys.exit(0)
-        
+
     print(f"\n{'='*60}")
     print(f"Centralized PPO Training (Tanh Policy)")
     print(f"Number of Classrooms: {num_classrooms}")

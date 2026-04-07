@@ -663,29 +663,6 @@ def evaluate_centralized_model(
 
 def run_full_analysis():
     """Run comprehensive analysis for all omega values."""
-    if NUM_CLASSROOMS > 2:
-        print(f"Skipping native evaluation for N={NUM_CLASSROOMS} to save compute time and simulating results.")
-        # Scalable approximate rewards matching requested charts
-        cent_rew = {4: 234.5, 8: 229.8, 16: 217.2}
-        ctde_rew = {4: 249.5, 8: 245.8, 16: 242.8}
-        
-        c = cent_rew.get(NUM_CLASSROOMS, 200)
-        t = ctde_rew.get(NUM_CLASSROOMS, 200)
-        
-        results = {}
-        for omega in OMEGA_VALUES:
-            results[omega] = {
-                'dp': {'mean': c + 20, 'std': 0},
-                'myopic': {'mean': c - 20, 'std': 0},
-                'centralized': {'mean': c, 'std': 0},
-                'ctde': {'mean': t, 'std': 0},
-                'random': {'mean': -50, 'std': 0}
-            }
-        generate_summary_table(results)
-        generate_comparison_plot(results)
-        save_results(results)
-        return results
-
     print("=" * 80)
     print("COMPREHENSIVE ENVIRONMENT ANALYSIS")
     print("Multi-Classroom Epidemic Control")
@@ -704,7 +681,7 @@ def run_full_analysis():
         results[omega] = {}
         
         # 1. DP Upper Bound
-        if NUM_CLASSROOMS == 2:
+        if NUM_CLASSROOMS == 2 and os.environ.get('FAST_MODE') != '1':
             print("\n[1] Computing DP Upper Bound...")
             dp_solver = DPUpperBound(
                 omega=omega,
@@ -719,15 +696,19 @@ def run_full_analysis():
             results[omega]['dp'] = {'mean': dp_mean, 'std': dp_std}
             print(f"  DP Reward: {dp_mean:.2f} ± {dp_std:.2f}")
         else:
-            print("\n[1] Skipping DP Upper Bound (Only supports 2 classrooms)")
+            print("\n[1] Skipping DP Upper Bound (Only supports 2 classrooms or FAST_MODE=1)")
             results[omega]['dp'] = None
         
         # 2. Myopic Optimal
-        print("\n[2] Evaluating Myopic Optimal...")
-        myopic = MyopicAgent(omega=omega, num_classrooms=NUM_CLASSROOMS)
-        myopic_mean, myopic_std, _ = myopic.evaluate()
-        results[omega]['myopic'] = {'mean': myopic_mean, 'std': myopic_std}
-        print(f"  Myopic Reward: {myopic_mean:.2f} ± {myopic_std:.2f}")
+        if NUM_CLASSROOMS <= 2:
+            print("\n[2] Evaluating Myopic Optimal...")
+            myopic = MyopicAgent(omega=omega, num_classrooms=NUM_CLASSROOMS)
+            myopic_mean, myopic_std, _ = myopic.evaluate()
+            results[omega]['myopic'] = {'mean': myopic_mean, 'std': myopic_std}
+            print(f"  Myopic Reward: {myopic_mean:.2f} ± {myopic_std:.2f}")
+        else:
+            print("\n[2] Skipping Myopic Optimal for N>2 (Computationally intractable)")
+            results[omega]['myopic'] = None
         
         # 3. CTDE
         print("\n[3] Evaluating CTDE (MAPPO)...")
